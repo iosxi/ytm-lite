@@ -18,6 +18,7 @@
 
 #include "ytm.h"
 #include <shlobj.h>
+#include <tlhelp32.h>
 
 typedef struct {
     BYTE  *db;
@@ -394,6 +395,126 @@ void ff_user_agent(const WCHAR *profileDir, char *ua, size_t cap)
     if (major < 100) major = 150;
     _snprintf(ua, cap, "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:%d.0) Gecko/20100101 Firefox/%d.0", major, major);
     ua[cap - 1] = 0;
+}
+
+static BOOL has_cookies(const WCHAR *dir)
+{
+    WCHAR p[MAX_PATH];
+    _snwprintf(p, MAX_PATH, L"%s\\cookies.sqlite", dir);
+    p[MAX_PATH - 1] = 0;
+    return GetFileAttributesW(p) != INVALID_FILE_ATTRIBUTES;
+}
+
+/* 「…\App\Firefox64\firefox.exe」から Portable 版のフォルダ(App の親)を得る */
+static BOOL portable_root_from_exe(const WCHAR *exe, WCHAR *root, size_t cap)
+{
+    const WCHAR *p = exe, *app = NULL;
+    for (; *p; p++)
+        if ((*p == L'\\' || *p == L'/') && !_wcsnicmp(p + 1, L"App\\", 4)) app = p;
+    if (!app) return FALSE;
+    if ((size_t)(app - exe) >= cap) return FALSE;
+    wmemcpy(root, exe, (size_t)(app - exe));
+    root[app - exe] = 0;
+    return TRUE;
+}
+
+/* 指定されたもの(プロファイルのフォルダ、Portable 版のフォルダ、firefox.exe や FirefoxPortable.exe)
+   から、cookies.sqlite のあるプロファイルのフォルダを得る。
+   Portable 版(PortableApps.com)は FirefoxPortable\Data\profile、本体は FirefoxPortable\App\Firefox64\firefox.exe */
+BOOL ff_resolve_profile(const WCHAR *given, WCHAR *out, size_t cap)
+{
+    WCHAR dir[MAX_PATH], t[MAX_PATH], *slash;
+    DWORD a;
+    if (!given || !*given) return FALSE;
+    wcsncpy_s(dir, MAX_PATH, given, _TRUNCATE);
+    /* 前後の引用符と末尾の \ を外す */
+    if (dir[0] == L'"') { memmove(dir, dir + 1, wcslen(dir) * sizeof(WCHAR)); slash = wcschr(dir, L'"'); if (slash) *slash = 0; }
+    while (wcslen(dir) > 3 && (dir[wcslen(dir) - 1] == L'\\' || dir[wcslen(dir) - 1] == L'/')) dir[wcslen(dir) - 1] = 0;
+    a = GetFileAttributesW(dir);
+    if (a == INVALID_FILE_ATTRIBUTES) return FALSE;
+    if (!(a & FILE_ATTRIBUTE_DIRECTORY)) {
+        /* exe が指定された: Portable の構成なら Data\profile、そうでなければ exe のフォルダ */
+        if (portable_root_from_exe(dir, t, MAX_PATH)) { wcscpy_s(dir, MAX_PATH, t); }
+        else { slash = wcsrchr(dir, L'\\'); if (slash) *slash = 0; }
+    }
+    if (has_cookies(dir)) { wcsncpy_s(out, cap, dir, _TRUNCATE); return TRUE; }
+    _snwprintf(t, MAX_PATH, L"%s\\Data\\profile", dir);
+    t[MAX_PATH - 1] = 0;
+    if (has_cookies(t)) { wcsncpy_s(out, cap, t, _TRUNCATE); return TRUE; }
+    _snwprintf(t, MAX_PATH, L"%s\\profile", dir);           /* Data フォルダを指定された */
+    t[MAX_PATH - 1] = 0;
+    if (has_cookies(t)) { wcsncpy_s(out, cap, t, _TRUNCATE); return TRUE; }
+    return FALSE;
+}
+
+/* Portable 版のプロファイルのフォルダから、起動に使う exe を得る(無ければ FALSE) */
+BOOL ff_launcher_for_profile(const WCHAR *profile, WCHAR *exe, size_t cap)
+{
+    WCHAR root[MAX_PATH], t[MAX_PATH];
+    size_t n = wcslen(profile);
+    if (n < 13 || _wcsicmp(profile + n - 13, L"\\Data\\profile")) return FALSE;
+    wcsncpy_s(root, MAX_PATH, profile, n - 13);
+    _snwprintf(t, MAX_PATH, L"%s\\FirefoxPortable.exe", root);
+    t[MAX_PATH - 1] = 0;
+    if (GetFileAttributesW(t) == INVALID_FILE_ATTRIBUTES) {
+        _snwprintf(t, MAX_PATH, L"%s\\App\\Firefox64\\firefox.exe", root);
+        if (GetFileAttributesW(t) == INVALID_FILE_ATTRIBUTES) return FALSE;
+    }
+    wcsncpy_s(exe, cap, t, _TRUNCATE);
+    return TRUE;
+}
+
+static void add_candidate(WCHAR (*list)[MAX_PATH], int *n, int max, const WCHAR *dir)
+{
+    int i;
+    if (*n >= max || !has_cookies(dir)) return;
+    for (i = 0; i < *n; i++) if (!_wcsicmp(list[i], dir)) return;
+    wcsncpy_s(list[(*n)++], MAX_PATH, dir, _TRUNCATE);
+}
+
+/* 読む候補を並べる: 動いている Portable 版 → いつものプロファイル → その他のプロファイル */
+int ff_candidates(WCHAR (*list)[MAX_PATH], int max)
+{
+    int            n = 0;
+    HANDLE         snap;
+    PROCESSENTRY32W pe;
+    WCHAR          p[MAX_PATH], ini[MAX_PATH], secs[4096], val[MAX_PATH], appdata[MAX_PATH];
+    const WCHAR   *s;
+
+    /* 1. 動いている firefox.exe が「…\App\Firefox…\firefox.exe」なら Portable 版 */
+    snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap != INVALID_HANDLE_VALUE) {
+        pe.dwSize = sizeof(pe);
+        if (Process32FirstW(snap, &pe)) do {
+            if (!_wcsicmp(pe.szExeFile, L"firefox.exe")) {
+                HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pe.th32ProcessID);
+                if (h) {
+                    WCHAR exe[MAX_PATH];
+                    DWORD len = MAX_PATH;
+                    if (QueryFullProcessImageNameW(h, 0, exe, &len) && ff_resolve_profile(exe, p, MAX_PATH))
+                        add_candidate(list, &n, max, p);
+                    CloseHandle(h);
+                }
+            }
+        } while (Process32NextW(snap, &pe));
+        CloseHandle(snap);
+    }
+    /* 2. いつものプロファイル */
+    if (ff_find_profile(p, MAX_PATH)) add_candidate(list, &n, max, p);
+    /* 3. profiles.ini にあるほかのプロファイル */
+    if (SUCCEEDED(SHGetFolderPathW(NULL, CSIDL_APPDATA, NULL, 0, appdata))) {
+        _snwprintf(ini, MAX_PATH, L"%s\\Mozilla\\Firefox\\profiles.ini", appdata);
+        GetPrivateProfileSectionNamesW(secs, ARRAYSIZE(secs), ini);
+        for (s = secs; *s; s += wcslen(s) + 1)
+            if (!_wcsnicmp(s, L"Profile", 7) && GetPrivateProfileStringW(s, L"Path", L"", val, MAX_PATH, ini)) {
+                WCHAR *q;
+                if (GetPrivateProfileIntW(s, L"IsRelative", 1, ini)) _snwprintf(p, MAX_PATH, L"%s\\Mozilla\\Firefox\\%s", appdata, val);
+                else wcsncpy_s(p, MAX_PATH, val, _TRUNCATE);
+                for (q = p; *q; q++) if (*q == L'/') *q = L'\\';
+                add_candidate(list, &n, max, p);
+            }
+    }
+    return n;
 }
 
 /* ふだん使われているプロファイルを探す。

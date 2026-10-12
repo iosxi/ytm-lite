@@ -1,6 +1,7 @@
 ﻿# ytm-lite の窓だけを撮る(前面に出さない)。検証用。
-#   powershell -File tools\snap.ps1 -ProcId <PID> -Out <png> [-Scale 0.5]
-param([int]$ProcId, [string]$Out, [double]$Scale = 0.5)
+#   powershell -File tools\snap.ps1 -ProcId <PID> -Out <png> [-Scale 0.5] [-Class <窓のクラス名>]
+#   -Class "#32770" でダイアログを撮る
+param([int]$ProcId, [string]$Out, [double]$Scale = 0.5, [string]$Class = "ytm-lite")
 Add-Type -AssemblyName System.Drawing
 Add-Type @"
 using System;
@@ -15,12 +16,12 @@ public static class W {
     [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h, IntPtr dc, uint f);
     [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
     [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
-    public static IntPtr Find(uint want) {
+    public static IntPtr Find(uint want, string cls) {
         IntPtr found = IntPtr.Zero;
         EnumWindows((h, l) => {
             uint pid; GetWindowThreadProcessId(h, out pid);
             var sb = new StringBuilder(64); GetClassName(h, sb, 64);
-            if (pid == want && sb.ToString() == "ytm-lite") { found = h; return false; }
+            if (pid == want && sb.ToString() == cls) { found = h; return false; }
             return true;
         }, IntPtr.Zero);
         return found;
@@ -28,7 +29,7 @@ public static class W {
 }
 "@
 [W]::SetProcessDPIAware() | Out-Null
-$h = [W]::Find([uint32]$ProcId)
+$h = [W]::Find([uint32]$ProcId, $Class)
 if ($h -eq [IntPtr]::Zero) { Write-Output "window not found"; exit 1 }
 $r = New-Object W+RECT
 [W]::GetWindowRect($h, [ref]$r) | Out-Null

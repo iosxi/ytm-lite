@@ -222,8 +222,16 @@ BOOL cfg_reload_cookie(char *err, size_t errlen)
     int   n = 0;
     if (g_cfg.cookieSource != COOKIE_FIREFOX) { _snprintf(err, errlen, "Firefox から読む設定ではない"); return FALSE; }
     wcscpy_s(prof, MAX_PATH, g_cfg.ffProfile);
-    if (!prof[0] || GetFileAttributesW(prof) == INVALID_FILE_ATTRIBUTES) {
+    if (!prof[0]) {
         if (!ff_find_profile(prof, MAX_PATH)) { _snprintf(err, errlen, "Firefox のプロファイルが見つからない"); return FALSE; }
+    } else if (GetFileAttributesW(prof) == INVALID_FILE_ATTRIBUTES) {
+        /* 覚えている場所が無い(Portable 版の USB を抜いているなど)。別のプロファイルへは切り替えない
+           (別のアカウントを読んでしまうので) */
+        char *u = W2U(prof);
+        _snprintf(err, errlen, "Firefox のプロファイルが見つからない(%s)", u ? u : "");
+        free(u);
+        err[errlen - 1] = 0;
+        return FALSE;
     }
     ck = ff_read_youtube_cookies(prof, &n, err, errlen);
     if (!ck) return FALSE;
@@ -234,14 +242,36 @@ BOOL cfg_reload_cookie(char *err, size_t errlen)
     return TRUE;
 }
 
+/* profile が空なら候補(動いている Portable 版、いつものプロファイル、ほかのプロファイル)を順に読み、
+   YouTube にログインしているものを使う。指定があれば、それ(Portable 版のフォルダや exe でもよい)だけ */
 BOOL cfg_use_firefox(const WCHAR *profile, char *err, size_t errlen)
 {
     WCHAR prof[MAX_PATH];
-    char *ck, *p;
+    char *ck = NULL, *p;
     int   n = 0;
-    if (profile && *profile) wcscpy_s(prof, MAX_PATH, profile);
-    else if (!ff_find_profile(prof, MAX_PATH)) { _snprintf(err, errlen, "Firefox のプロファイルが見つかりませんでした"); return FALSE; }
-    ck = ff_read_youtube_cookies(prof, &n, err, errlen);
+    if (profile && *profile) {
+        if (!ff_resolve_profile(profile, prof, MAX_PATH)) {
+            _snprintf(err, errlen, "そのフォルダに Firefox のプロファイル(cookies.sqlite)が見つかりません");
+            return FALSE;
+        }
+        ck = ff_read_youtube_cookies(prof, &n, err, errlen);
+    } else {
+        WCHAR (*list)[MAX_PATH] = (WCHAR (*)[MAX_PATH])malloc(sizeof(WCHAR) * MAX_PATH * 16);
+        int   cnt, i;
+        if (!list) return FALSE;
+        cnt = ff_candidates(list, 16);
+        for (i = 0; i < cnt && !ck; i++) {
+            ck = ff_read_youtube_cookies(list[i], &n, err, errlen);
+            if (ck) wcscpy_s(prof, MAX_PATH, list[i]);
+        }
+        free(list);
+        if (!ck) {
+            if (!cnt) _snprintf(err, errlen, "Firefox のプロファイルが見つかりませんでした。Portable 版はフォルダを指定してください");
+            else _snprintf(err, errlen, "Firefox のプロファイルを %d 個見ましたが、YouTube にログインしたものがありません", cnt);
+            err[errlen - 1] = 0;
+            return FALSE;
+        }
+    }
     if (!ck) return FALSE;
     swap_cookie(ck);
     g_cfg.cookieSource = COOKIE_FIREFOX;

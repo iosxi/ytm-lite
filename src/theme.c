@@ -97,11 +97,106 @@ void theme_allow_dark(HWND hwnd)
     if (p_AllowDarkModeForWindow) p_AllowDarkModeForWindow(hwnd, (BYTE)g_dark);
 }
 
-static void title_bar(HWND hwnd)
+/* タイトルバーと枠の色。DWM の属性に加えて、uxtheme が枠を描くとき用の
+   「ダークの色を使う」(SetWindowCompositionAttribute の WCA_USEDARKMODECOLORS)も付ける。
+   2026-10-12: ダイアログを動かしたあと、タイトルバーと太い枠が白くなったと本人から報告
+   (こちらでは再現できず。DWM の属性は 1 のままだった) */
+typedef struct { DWORD attr; PVOID data; SIZE_T size; } WCADATA;
+typedef BOOL (WINAPI *fnSetWindowCompositionAttribute)(HWND, WCADATA *);
+
+void theme_title_bar(HWND hwnd)
 {
+    static fnSetWindowCompositionAttribute pSWCA;
+    static BOOL looked;
     BOOL on = g_dark;
     if (FAILED(DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &on, sizeof(on))))
         DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE_OLD, &on, sizeof(on));
+    if (!looked) {
+        HMODULE u = GetModuleHandleW(L"user32.dll");
+        looked = TRUE;
+        if (u) pSWCA = (fnSetWindowCompositionAttribute)(void *)GetProcAddress(u, "SetWindowCompositionAttribute");
+    }
+    if (pSWCA) {
+        WCADATA d = { 26, &on, sizeof(on) };     /* WCA_USEDARKMODECOLORS */
+        pSWCA(hwnd, &d);
+    }
+}
+
+#define title_bar theme_title_bar
+
+/* 入力欄の縁(WS_EX_CLIENTEDGE の 2px、WS_BORDER の 1px)は、ダークでもテーマが明るい線で描くので
+   描き直す。入力中だけ強調色にする(obtan の EditSubclass と同じ) */
+static LRESULT CALLBACK edit_subclass(HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR ref)
+{
+    LRESULT r = DefSubclassProc(h, msg, wp, lp);
+    (void)id; (void)ref;
+    if (msg == WM_SETFOCUS || msg == WM_KILLFOCUS || msg == WM_ENABLE) {
+        RedrawWindow(h, NULL, NULL, RDW_FRAME | RDW_INVALIDATE);
+    } else if (msg == WM_NCPAINT) {
+        /* ライトでもテーマの縁はほとんど見えない(2026-10-12 撮影)ので、両方で描く */
+        int edge = (GetWindowLongW(h, GWL_EXSTYLE) & WS_EX_CLIENTEDGE) ? 2 : (GetWindowLongW(h, GWL_STYLE) & WS_BORDER) ? 1 : 0;
+        if (edge) {
+            HDC    dc = GetWindowDC(h);
+            RECT   rc;
+            HBRUSH line = CreateSolidBrush(GetFocus() == h ? theme_accent() : g_dark ? RGB(0x5a, 0x5a, 0x5a) : RGB(0xa0, 0xa0, 0xa0));
+            GetWindowRect(h, &rc);
+            OffsetRect(&rc, -rc.left, -rc.top);
+            FrameRect(dc, &rc, line);
+            if (edge == 2) {
+                InflateRect(&rc, -1, -1);
+                FrameRect(dc, &rc, g_brCtrl);
+            }
+            DeleteObject(line);
+            ReleaseDC(h, dc);
+        }
+    }
+    return r;
+}
+
+/* 押しボタンは自前で描く。テーマ任せだと文字の色を指定できず、Windows の版によっては
+   黒地に黒い文字になりうる(Windows 11 23H2 でチェックボックスの文字が黒くなった。obtan v4)。
+   既定のボタン(Enter で押されるもの)は枠を強調色にする */
+void theme_draw_button(const DRAWITEMSTRUCT *di)
+{
+    HDC      dc = di->hDC;
+    RECT     r = di->rcItem;
+    WCHAR    text[128];
+    HWND     b = di->hwndItem;
+    int      dpi = (int)GetDpiForWindow(b), rad = MulDiv(4, dpi, 96);
+    BOOL     pressed = (di->itemState & ODS_SELECTED) != 0, disabled = (di->itemState & ODS_DISABLED) != 0;
+    BOOL     def = (BOOL)(INT_PTR)GetPropW(b, L"ytm.defbtn") || (di->itemState & ODS_FOCUS);
+    COLORREF face = g_dark ? (pressed ? RGB(40, 40, 40) : RGB(55, 55, 55)) : (pressed ? RGB(229, 229, 229) : RGB(253, 253, 253));
+    COLORREF edge = def ? theme_accent() : (g_dark ? RGB(80, 80, 80) : RGB(204, 204, 204));
+    HBRUSH   fb, ob;
+    HPEN     pen, op;
+    HFONT    of;
+
+    FillRect(dc, &r, g_brBack);
+    fb = CreateSolidBrush(face);
+    pen = CreatePen(PS_SOLID, 1, edge);
+    ob = (HBRUSH)SelectObject(dc, fb);
+    op = (HPEN)SelectObject(dc, pen);
+    RoundRect(dc, r.left, r.top, r.right, r.bottom, rad * 2, rad * 2);
+    SelectObject(dc, ob);
+    SelectObject(dc, op);
+    DeleteObject(fb);
+    DeleteObject(pen);
+
+    GetWindowTextW(b, text, ARRAYSIZE(text));
+    of = (HFONT)SelectObject(dc, (HFONT)SendMessageW(b, WM_GETFONT, 0, 0));
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, disabled ? theme_dim_text() : theme_text());
+    DrawTextW(dc, text, -1, &r, DT_SINGLELINE | DT_CENTER | DT_VCENTER | DT_HIDEPREFIX);
+    SelectObject(dc, of);
+}
+
+/* ダイアログの押しボタンを自前で描く形に変える(既定のボタンは印を付けて覚えておく) */
+static void own_push_button(HWND c)
+{
+    LONG st = GetWindowLongW(c, GWL_STYLE), type = st & BS_TYPEMASK;
+    if (type != BS_PUSHBUTTON && type != BS_DEFPUSHBUTTON) return;
+    if (type == BS_DEFPUSHBUTTON) SetPropW(c, L"ytm.defbtn", (HANDLE)1);
+    SetWindowLongW(c, GWL_STYLE, (st & ~BS_TYPEMASK) | BS_OWNERDRAW);
 }
 
 /* 一覧(ListView)の見出しの文字色 */
@@ -127,7 +222,9 @@ static void apply_listview(HWND lv)
     HWND hd = ListView_GetHeader(lv);
     SetWindowSubclass(lv, lv_subclass, 1, 0);
     theme_allow_dark(lv);
-    SetWindowTheme(lv, g_dark ? L"DarkMode_ItemsView" : L"ItemsView", NULL);
+    /* 一覧そのものは DarkMode_Explorer(スクロールバーも暗くなる。ItemsView だと白いまま。
+       2026-10-13 本人の指摘)、見出しは DarkMode_ItemsView。obtan と同じ組み合わせ */
+    SetWindowTheme(lv, g_dark ? L"DarkMode_Explorer" : L"Explorer", NULL);
     if (hd) {
         theme_allow_dark(hd);
         SetWindowTheme(hd, g_dark ? L"DarkMode_ItemsView" : NULL, NULL);
@@ -147,8 +244,12 @@ static BOOL CALLBACK apply_child(HWND c, LPARAM lp)
     if (!lstrcmpiW(cls, WC_LISTVIEWW)) {
         apply_listview(c);
     } else if (!lstrcmpiW(cls, L"Edit")) {
-        SetWindowTheme(c, g_dark ? L"DarkMode_CFD" : NULL, NULL);
+        /* 複数行の入力欄はスクロールバーも暗くしたいので DarkMode_Explorer(色は WM_CTLCOLOREDIT で決める) */
+        SetWindowTheme(c, g_dark ? ((GetWindowLongW(c, GWL_STYLE) & ES_MULTILINE) ? L"DarkMode_Explorer" : L"DarkMode_CFD") : NULL, NULL);
+        SetWindowSubclass(c, edit_subclass, 3, 0);
+        RedrawWindow(c, NULL, NULL, RDW_FRAME | RDW_INVALIDATE);
     } else if (!lstrcmpiW(cls, L"Button")) {
+        own_push_button(c);         /* 本体の帯のボタンは元から自前で描いているので変わらない */
         SetWindowTheme(c, g_dark ? L"DarkMode_Explorer" : NULL, NULL);
     } else if (!lstrcmpiW(cls, L"ScrollBar")) {
         SetWindowTheme(c, g_dark ? L"DarkMode_Explorer" : NULL, NULL);

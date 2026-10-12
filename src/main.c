@@ -202,13 +202,31 @@ int cli_main(int argc, WCHAR **argv)
         const WCHAR *given = arg_after(argc, argv, L"-ffcookies");
         char *ck, *u;
         int   n = 0;
-        if (given && given[0] != L'-') wcscpy_s(prof, MAX_PATH, given);
-        else if (!ff_find_profile(prof, MAX_PATH)) { out_printf("no firefox profile"); return 1; }
+        if (given && given[0] != L'-') {
+            /* フォルダ(Portable 版、Data、プロファイル)や exe を、プロファイルのフォルダにする */
+            if (!ff_resolve_profile(given, prof, MAX_PATH)) { out_printf("cannot resolve profile from the given path"); return 1; }
+            ck = ff_read_youtube_cookies(prof, &n, err, sizeof(err));
+        } else {
+            /* 候補を全部出し、ログインしている最初のものを使う(画面の「Firefox から読み込む」と同じ順) */
+            WCHAR (*list)[MAX_PATH] = (WCHAR (*)[MAX_PATH])malloc(sizeof(WCHAR) * MAX_PATH * 16);
+            int   cnt = list ? ff_candidates(list, 16) : 0, i;
+            ck = NULL;
+            for (i = 0; i < cnt; i++) {
+                char *c2, *lu = W2U(list[i]);
+                int   n2 = 0;
+                c2 = ff_read_youtube_cookies(list[i], &n2, err, sizeof(err));
+                out_printf("candidate %d: %s -> %s", i + 1, lu ? lu : "", c2 ? "logged in" : err);
+                free(lu);
+                if (c2 && !ck) { ck = c2; n = n2; wcscpy_s(prof, MAX_PATH, list[i]); }
+                else if (c2) { SecureZeroMemory(c2, strlen(c2)); free(c2); }
+            }
+            free(list);
+            if (!cnt) { out_printf("no firefox profile"); return 1; }
+        }
+        if (!ck) { out_printf("error: %s", err); return 1; }
         u = W2U(prof);
         out_printf("profile=%s", u ? u : "");
         free(u);
-        ck = ff_read_youtube_cookies(prof, &n, err, sizeof(err));
-        if (!ck) { out_printf("error: %s", err); return 1; }
         {
             char  *copy = U8Dup(ck), *p, *ctx = NULL;
             Buf    names = {0};

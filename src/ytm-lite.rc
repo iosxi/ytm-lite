@@ -6,8 +6,8 @@ IDI_APP ICON "ytm-lite.ico"
 1 RT_MANIFEST "ytm-lite.manifest"
 
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION     4,0,0,0
-PRODUCTVERSION  4,0,0,0
+FILEVERSION     5,0,0,0
+PRODUCTVERSION  5,0,0,0
 FILEFLAGSMASK   0x3fL
 FILEFLAGS       0x0L
 FILEOS          VOS_NT_WINDOWS32
@@ -19,11 +19,11 @@ BEGIN
         BLOCK "041104b0"
         BEGIN
             VALUE "FileDescription",  "ytm-lite - YouTube Music のプレイリストを再生するだけの軽いアプリ"
-            VALUE "FileVersion",      "4"
+            VALUE "FileVersion",      "5"
             VALUE "InternalName",     "ytm-lite"
             VALUE "OriginalFilename", "ytm-lite.exe"
             VALUE "ProductName",      "ytm-lite"
-            VALUE "ProductVersion",   "4"
+            VALUE "ProductVersion",   "5"
         END
     END
     BLOCK "VarFileInfo"
@@ -32,22 +32,26 @@ BEGIN
     END
 END
 
-IDD_LOGIN DIALOGEX 0, 0, 320, 252
-STYLE DS_MODALFRAME | DS_CENTER | DS_SHELLFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU
+IDD_LOGIN DIALOGEX 0, 0, 320, 290
+STYLE DS_CENTER | DS_SHELLFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "ログイン情報の設定"
 FONT 9, "Yu Gothic UI", 400, 0, 0x80
 BEGIN
     LTEXT           "", IDC_FF_HELP, 7, 7, 306, 28
-    DEFPUSHBUTTON   "Firefox から読み込む", IDC_FF_BTN, 7, 38, 100, 16, WS_TABSTOP
-    LTEXT           "", IDC_FF_STATUS, 113, 41, 200, 12
-    LTEXT           "", IDC_AUTH_HELP, 7, 66, 306, 62
-    EDITTEXT        IDC_AUTH_TEXT, 7, 130, 306, 92, ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN | WS_VSCROLL | WS_TABSTOP
-    PUSHBUTTON      "保存", IDOK, 203, 230, 52, 15
-    PUSHBUTTON      "閉じる", IDCANCEL, 261, 230, 52, 15
+    LTEXT           "Firefox のフォルダ:", -1, 7, 40, 70, 10
+    EDITTEXT        IDC_FF_PATH, 7, 51, 248, 14, ES_AUTOHSCROLL | WS_TABSTOP
+    PUSHBUTTON      "参照…", IDC_FF_BROWSE, 261, 51, 52, 14, WS_TABSTOP
+    DEFPUSHBUTTON   "Firefox から読み込む", IDC_FF_BTN, 7, 72, 100, 16, WS_TABSTOP
+    PUSHBUTTON      "music.youtube.com を開く", IDC_FF_OPEN, 113, 72, 110, 16, WS_TABSTOP
+    LTEXT           "", IDC_FF_STATUS, 7, 92, 306, 12
+    LTEXT           "", IDC_AUTH_HELP, 7, 112, 306, 62
+    EDITTEXT        IDC_AUTH_TEXT, 7, 176, 306, 84, ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN | WS_VSCROLL | WS_TABSTOP
+    PUSHBUTTON      "保存", IDOK, 203, 268, 52, 15
+    PUSHBUTTON      "閉じる", IDCANCEL, 261, 268, 52, 15
 END
 
 IDD_OPENURL DIALOGEX 0, 0, 300, 88
-STYLE DS_MODALFRAME | DS_CENTER | DS_SHELLFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU
+STYLE DS_CENTER | DS_SHELLFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "プレイリストを開く"
 FONT 9, "Yu Gothic UI", 400, 0, 0x80
 BEGIN

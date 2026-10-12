@@ -28,6 +28,11 @@ Firefox で music.youtube.com にログインしていれば、［Firefox から
 `ytm-lite.ini` には「Firefox から読む」ことと Firefox のプロファイルの場所だけを書き、cookie は書きません。
 Firefox が起動していても読めます。Firefox のファイルには何も書きません。
 
+プロファイルは自動で探します。動いている Firefox Portable、いつものプロファイル、そのほかのプロファイルの順に見て、
+YouTube にログインしているものを使います。見つからないときは［参照…］で Firefox Portable のフォルダ
+（`FirefoxPortable`）かプロファイルのフォルダを指定してください。
+［music.youtube.com を開く］で、その Firefox で YouTube Music を開けます（ログインするため）。
+
 Chrome / Edge は cookie を暗号化していて（Chrome 127 からの App-Bound Encryption）、外のアプリからは読めません。
 
 #### 手動で貼り付ける（Chrome、Edge など）

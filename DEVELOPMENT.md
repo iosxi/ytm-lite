@@ -163,6 +163,37 @@ trackbar は位置が変わってもつまみの周りしか描き直さない�
 - 「次へ」の連打で回数を使わないよう、利用者の操作から 0.4 秒待って、止まった曲だけを取りに行く。
   実測: 再生 1 回のあと「次へ」を 0.1 秒おきに 5 回送ると、player は 6 曲目の 1 回だけだった（以前なら 6 回）。
 
+### 2026-10-13: 23H2 で黒地に黒い文字にならないか（v5）
+
+文字の色を Windows のテーマ任せにしている箇所を洗い出した。黒地に黒い文字になりうるのは、ダイアログの押しボタン
+（テーマが文字を描き、`WM_CTLCOLORBTN` の文字色は効かない。23H2 でチェックボックスの文字が黒くなったのと同じ仕組み。obtan v4）
+だけだった。押しボタンは自前で描くようにした（`theme_draw_button`）。ほかは自前で色を指定しているか（一覧、見出し、説明文、入力欄）、
+自前で描いている（本体のボタン、シークバー、帯）。メニューは背景もテーマが描くので、黒地に黒にはならない。
+23H2 の実機では確かめていない。
+
+あわせて:
+- 入力欄の縁を自前で描く（ダークでもライトでもテーマの縁が見えにくかった）。複数行の入力欄は DarkMode_Explorer でスクロールバーも暗く。
+- 一覧（ListView）は DarkMode_Explorer にした。DarkMode_ItemsView だとスクロールバーが白いままだった（本人の指摘）。見出しは DarkMode_ItemsView のまま。
+- ダイアログを動かすとタイトルバーと太い枠が白くなったと本人から報告。こちらでは前面に出さない範囲で再現できなかった
+  （`DwmGetWindowAttribute(20)` は 1 のまま）。太い立体の枠（`DS_MODALFRAME`）をやめ、`WCA_USEDARKMODECOLORS` も付け、
+  `WM_ACTIVATE` のたびに付け直すようにした。直ったかは本人の確認待ち。
+
+### 2026-10-13: Firefox Portable（v5）
+
+遠隔の利用者から「Firefox Portable でログインしても『ログインしていないようです』になる」と報告。
+Portable 版（PortableApps.com）のプロファイルは `FirefoxPortable\Data\profile`、本体は `FirefoxPortable\App\Firefox64\firefox.exe`
+（[PortableApps.com](https://portableapps.com/node/49)）。v4 は `%APPDATA%` のプロファイルしか見ていなかった。
+
+- 動いている `firefox.exe` の場所が `…\App\Firefox…` なら Portable 版として `Data\profile` を候補の先頭にする。
+  いつものプロファイル、profiles.ini のほかのプロファイルも候補にし、ログインしている最初のものを使う。
+- ダイアログにフォルダの欄と［参照…］を足した。Portable 版のフォルダ、`Data`、プロファイル、exe のどれでもよい。
+- ［music.youtube.com を開く］: Portable 版なら `FirefoxPortable.exe`、無ければ入っている Firefox、それも無ければ既定のブラウザで開く。
+- 覚えたプロファイルが無くなったとき（USB を抜いたなど）は、ほかのプロファイルへ切り替えない（別のアカウントを読むので）。
+
+実測（偽の Portable 構成、`App\Firefox64\firefox.exe` に ping.exe を置いて動かす）: フォルダ・`Data`・exe の指定はどれも
+`Data\profile` を読めた。自動では、Portable 版が動いていないときはいつものプロファイル、動いているときは Portable 版を選んだ。
+本物の Firefox Portable と［music.youtube.com を開く］は確かめていない。
+
 ### 効果が無かったので戻したもの（2026-10-12）
 
 - マニフェストの `heapType=SegmentHeap`: 待機 3,136KB と 3,168KB、プレイリストを読んだ後 4,240KB と 4,224KB。差なし。

@@ -19,8 +19,10 @@
 #include "resource.h"
 #include <windowsx.h>
 #include <shellapi.h>
+#include <shobjidl.h>
 
 #pragma comment(lib, "comctl32.lib")
+#pragma comment(lib, "uuid.lib")
 #pragma comment(lib, "gdi32.lib")
 #pragma comment(lib, "user32.lib")
 
@@ -738,6 +740,44 @@ static const WCHAR FF_HELP[] =
     L"以後は起動のたびに Firefox から読み直すので、取り直しは要りません。"
     L"(Chrome は cookie を暗号化しているため、外から読めません)";
 
+/* フォルダを選ぶ(Portable 版のフォルダやプロファイル) */
+static BOOL pick_folder(HWND owner, WCHAR *out, size_t cap)
+{
+    IFileOpenDialog *fd = NULL;
+    IShellItem      *it = NULL;
+    WCHAR           *path = NULL;
+    BOOL             ok = FALSE;
+    DWORD            opt;
+    if (FAILED(CoCreateInstance(&CLSID_FileOpenDialog, NULL, CLSCTX_INPROC_SERVER, &IID_IFileOpenDialog, (void **)&fd))) return FALSE;
+    if (SUCCEEDED(IFileOpenDialog_GetOptions(fd, &opt)))
+        IFileOpenDialog_SetOptions(fd, opt | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST);
+    IFileOpenDialog_SetTitle(fd, L"Firefox のフォルダ(Portable 版のフォルダ、またはプロファイル)");
+    if (SUCCEEDED(IFileOpenDialog_Show(fd, owner)) && SUCCEEDED(IFileOpenDialog_GetResult(fd, &it))) {
+        if (SUCCEEDED(IShellItem_GetDisplayName(it, SIGDN_FILESYSPATH, &path))) {
+            wcsncpy_s(out, cap, path, _TRUNCATE);
+            CoTaskMemFree(path);
+            ok = TRUE;
+        }
+        IShellItem_Release(it);
+    }
+    IFileOpenDialog_Release(fd);
+    return ok;
+}
+
+/* その Firefox で music.youtube.com を開く(ログインしてもらうため)。
+   Portable 版なら FirefoxPortable.exe、exe を指定されたらそれ、無ければ入っている Firefox、それも無ければ既定のブラウザ */
+static void open_in_firefox(HWND dlg, const WCHAR *given)
+{
+    static const WCHAR url[] = L"https://music.youtube.com/";
+    WCHAR prof[MAX_PATH], exe[MAX_PATH];
+    DWORD a = given && *given ? GetFileAttributesW(given) : INVALID_FILE_ATTRIBUTES;
+    if (a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY)) wcsncpy_s(exe, MAX_PATH, given, _TRUNCATE);
+    else if (!(given && *given && ff_resolve_profile(given, prof, MAX_PATH) && ff_launcher_for_profile(prof, exe, MAX_PATH))) exe[0] = 0;
+    if (exe[0] && (INT_PTR)ShellExecuteW(dlg, L"open", exe, url, NULL, SW_SHOWNORMAL) > 32) return;
+    if ((INT_PTR)ShellExecuteW(dlg, L"open", L"firefox.exe", url, NULL, SW_SHOWNORMAL) > 32) return;
+    ShellExecuteW(dlg, L"open", url, NULL, NULL, SW_SHOWNORMAL);
+}
+
 static const WCHAR AUTH_HELP[] =
     L"手動で貼り付ける場合(Chrome、Edge など):\r\n"
     L"1. music.youtube.com を開いて F12 → [ネットワーク] を開き、ページを再読み込みする\r\n"
@@ -757,16 +797,40 @@ static INT_PTR CALLBACK login_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
         SetDlgItemTextW(dlg, IDC_AUTH_HELP, AUTH_HELP);
         SetDlgItemTextW(dlg, IDC_FF_STATUS, g_cfg.cookieSource == COOKIE_FIREFOX ? L"いまは Firefox から読んでいます" :
                                             g_cfg.cookieSource == COOKIE_PASTED ? L"いまは貼り付けた cookie を使っています" : L"");
+        if (g_cfg.cookieSource == COOKIE_FIREFOX) SetDlgItemTextW(dlg, IDC_FF_PATH, g_cfg.ffProfile);
+        SendDlgItemMessageW(dlg, IDC_FF_PATH, EM_SETCUEBANNER, TRUE, (LPARAM)L"空なら自動で探します(Portable 版はそのフォルダを指定)");
         SendDlgItemMessageW(dlg, IDC_AUTH_TEXT, EM_LIMITTEXT, 256 * 1024, 0);
+        SendMessageW(dlg, WM_SETICON, ICON_SMALL, (LPARAM)LoadImageW(g_inst, MAKEINTRESOURCEW(IDI_APP), IMAGE_ICON,
+                     GetSystemMetricsForDpi(SM_CXSMICON, GetDpiForWindow(dlg)), GetSystemMetricsForDpi(SM_CYSMICON, GetDpiForWindow(dlg)), 0));
         theme_apply_window(dlg);
         return TRUE;
+    case WM_DRAWITEM:
+        theme_draw_button((const DRAWITEMSTRUCT *)lp);
+        SetWindowLongPtrW(dlg, DWLP_MSGRESULT, TRUE);
+        return TRUE;
+    case WM_ACTIVATE:
+        theme_title_bar(dlg);           /* アクティブ・非アクティブのたびに付け直す */
+        break;
     case WM_CTLCOLORDLG: case WM_CTLCOLORSTATIC: case WM_CTLCOLOREDIT: case WM_CTLCOLORBTN:
         return theme_ctlcolor(msg, (HDC)wp, (HWND)lp, FALSE);
     case WM_COMMAND:
+        if (LOWORD(wp) == IDC_FF_BROWSE) {
+            WCHAR path[MAX_PATH];
+            if (pick_folder(dlg, path, MAX_PATH)) SetDlgItemTextW(dlg, IDC_FF_PATH, path);
+            return TRUE;
+        }
+        if (LOWORD(wp) == IDC_FF_OPEN) {
+            WCHAR path[MAX_PATH];
+            GetDlgItemTextW(dlg, IDC_FF_PATH, path, MAX_PATH);
+            open_in_firefox(dlg, path);
+            SetDlgItemTextW(dlg, IDC_FF_STATUS, L"開いた Firefox でログインしてから、[Firefox から読み込む] を押してください");
+            return TRUE;
+        }
         if (LOWORD(wp) == IDC_FF_BTN) {
             char   err[256];
-            WCHAR *w;
-            if (cfg_use_firefox(NULL, err, sizeof(err))) {
+            WCHAR *w, path[MAX_PATH];
+            GetDlgItemTextW(dlg, IDC_FF_PATH, path, MAX_PATH);
+            if (cfg_use_firefox(path, err, sizeof(err))) {
                 wcscpy_s(g_loginResult, ARRAYSIZE(g_loginResult), L"Firefox から cookie を読み込みました");
                 EndDialog(dlg, IDOK);
                 return TRUE;
@@ -818,8 +882,17 @@ static INT_PTR CALLBACK url_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
         SetDlgItemTextW(dlg, IDC_URL_HELP, L"プレイリストの URL か ID を入れてください。"
                                            L"公開・限定公開のものは、ログインしなくても開けます。");
         SetWindowLongPtrW(dlg, DWLP_USER, lp);
+        SendMessageW(dlg, WM_SETICON, ICON_SMALL, (LPARAM)LoadImageW(g_inst, MAKEINTRESOURCEW(IDI_APP), IMAGE_ICON,
+                     GetSystemMetricsForDpi(SM_CXSMICON, GetDpiForWindow(dlg)), GetSystemMetricsForDpi(SM_CYSMICON, GetDpiForWindow(dlg)), 0));
         theme_apply_window(dlg);
         return TRUE;
+    case WM_DRAWITEM:
+        theme_draw_button((const DRAWITEMSTRUCT *)lp);
+        SetWindowLongPtrW(dlg, DWLP_MSGRESULT, TRUE);
+        return TRUE;
+    case WM_ACTIVATE:
+        theme_title_bar(dlg);           /* アクティブ・非アクティブのたびに付け直す */
+        break;
     case WM_CTLCOLORDLG: case WM_CTLCOLORSTATIC: case WM_CTLCOLOREDIT: case WM_CTLCOLORBTN:
         return theme_ctlcolor(msg, (HDC)wp, (HWND)lp, FALSE);
     case WM_COMMAND:
@@ -1480,6 +1553,7 @@ int ui_run(HINSTANCE inst, BOOL mute, BOOL noActivate)
         return 0;
     }
 
+    CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);   /* フォルダを選ぶ画面に要る */
     icc.dwSize = sizeof(icc);
     icc.dwICC = ICC_LISTVIEW_CLASSES | ICC_BAR_CLASSES;
     InitCommonControlsEx(&icc);

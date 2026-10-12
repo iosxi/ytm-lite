@@ -22,7 +22,7 @@
 #include <wchar.h>
 
 #define APP_NAME     L"ytm-lite"
-#define APP_VERSION  "4"            /* .rc の VERSIONINFO と .manifest も合わせて上げる */
+#define APP_VERSION  "5"            /* .rc の VERSIONINFO と .manifest も合わせて上げる */
 
 /* 画面のスレッドへ届ける通知 */
 #define WM_APP_LIBRARY   (WM_APP + 1)   /* lParam = LibResult*  */
@@ -129,6 +129,9 @@ BOOL cfg_reload_cookie(char *err, size_t errlen);   /* Firefox から読み直�
 char *ff_read_youtube_cookies(const WCHAR *profileDir, int *count, char *err, size_t errlen);
 void  ff_user_agent(const WCHAR *profileDir, char *ua, size_t cap);
 BOOL  ff_find_profile(WCHAR *out, size_t cap);
+BOOL  ff_resolve_profile(const WCHAR *given, WCHAR *out, size_t cap);   /* フォルダや exe からプロファイルへ */
+BOOL  ff_launcher_for_profile(const WCHAR *profile, WCHAR *exe, size_t cap);
+int   ff_candidates(WCHAR (*list)[MAX_PATH], int max);
 
 /* ---------------------------------------------------------------- slider.c */
 #define SLIDER_CLASS  L"ytm-slider"
@@ -238,6 +241,8 @@ HBRUSH   theme_footer_brush(void);
 HBRUSH   theme_ctrl_brush(void);
 void     theme_allow_dark(HWND hwnd);
 void     theme_apply_window(HWND hwnd);
+void     theme_title_bar(HWND hwnd);                  /* アクティブになるたびに付け直す */
+void     theme_draw_button(const DRAWITEMSTRUCT *di); /* ダイアログの押しボタン(自前で描く) */
 LRESULT  theme_ctlcolor(UINT msg, HDC dc, HWND ctl, BOOL dimText);
 
 /* ---------------------------------------------------------------- ui.c / main.c */

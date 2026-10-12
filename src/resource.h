@@ -10,3 +10,6 @@
 #define IDC_FF_HELP      1005
 #define IDC_FF_BTN       1006
 #define IDC_FF_STATUS    1007
+#define IDC_FF_PATH      1008
+#define IDC_FF_BROWSE    1009
+#define IDC_FF_OPEN      1010
