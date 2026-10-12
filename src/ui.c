@@ -1319,6 +1319,15 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     case WM_APP_PLAYLIST: on_playlist((PlResult *)lp); return 0;
     case WM_APP_AUDIO:    on_audio((AudioResult *)lp); return 0;
     case WM_APP_PLAYER:   on_player((int)wp, (int)lp); InvalidateRect(g_btn[1], NULL, FALSE); return 0;
+    case WM_APP_WAIT:
+        if (g_loadingAudio) {
+            WCHAR text[160];
+            if (wp) _snwprintf(text, ARRAYSIZE(text), L"YouTube への要求を控えるため、約 %d 秒待ってから読み込みます(10 分に 20 曲まで)", (int)wp);
+            else wcscpy_s(text, ARRAYSIZE(text), L"読み込み中…");
+            text[ARRAYSIZE(text) - 1] = 0;
+            set_status(text, FALSE);
+        }
+        return 0;
     case WM_CLOSE:
         save_placement();
         cfg_save();

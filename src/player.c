@@ -78,6 +78,7 @@ typedef struct {
     int                  volume;
     LONG64               lastDevCheck;
     BOOL                 mfUp;              /* MFStartup 済み(最初の曲を開くときまで遅らせる) */
+    LONG64               decoded;           /* この曲で復号できたバイト数(0 のまま終わったら失敗) */
 } P;
 
 static void notify(int ev, int gen)
@@ -96,6 +97,57 @@ static void close_source(P *p)
     p->eos = FALSE;
 }
 
+/* MP4 の箱を 1 つ読む。読めなければ FALSE */
+static BOOL box_at(const BYTE *p, DWORD end, DWORD off, DWORD *size, DWORD *hdr)
+{
+    unsigned long long sz;
+    if (off + 8 > end) return FALSE;
+    sz = ((DWORD)p[off] << 24) | ((DWORD)p[off + 1] << 16) | ((DWORD)p[off + 2] << 8) | p[off + 3];
+    *hdr = 8;
+    if (sz == 1) {
+        int i;
+        if (off + 16 > end) return FALSE;
+        for (sz = 0, i = 0; i < 8; i++) sz = (sz << 8) | p[off + 8 + i];
+        *hdr = 16;
+    } else if (sz == 0) {
+        sz = end - off;
+    }
+    if (sz < *hdr || sz > end - off) return FALSE;
+    *size = (DWORD)sz;
+    return TRUE;
+}
+
+/* moov > trak > edts(エディットリスト)を free に書き換える。
+ *
+ * 2026-10-12 の実測: YouTube Music の一部の曲(itag 140)は、断片化した MP4 の trak に
+ * edts/elst(先頭の 1600 サンプル = 約 36ms の前置きを飛ばす指定)を持つ。Windows の
+ * MPEG-4 の読み取りはこれがあると 1 サンプルも返さずに終わりを返す(-playtest で位置 0 のまま)。
+ * free にすると最後まで再生できた。失うのは前置きを飛ばす指定だけ。 */
+static int neutralize_edts(BYTE *p, DWORD n)
+{
+    DWORD off = 0, size, hdr;
+    int   fixed = 0;
+    while (box_at(p, n, off, &size, &hdr)) {
+        if (!memcmp(p + off + 4, "moov", 4)) {
+            DWORD t = off + hdr, tsize, thdr;
+            while (t < off + size && box_at(p, off + size, t, &tsize, &thdr)) {
+                if (!memcmp(p + t + 4, "trak", 4)) {
+                    DWORD e = t + thdr, esize, ehdr;
+                    while (e < t + tsize && box_at(p, t + tsize, e, &esize, &ehdr)) {
+                        if (!memcmp(p + e + 4, "edts", 4)) { memcpy(p + e + 4, "free", 4); fixed++; }
+                        e += esize;
+                    }
+                }
+                t += tsize;
+            }
+            break;          /* moov は 1 つ */
+        }
+        if (!memcmp(p + off + 4, "moof", 4) || !memcmp(p + off + 4, "mdat", 4)) break;
+        off += size;
+    }
+    return fixed;
+}
+
 /* a の中身(HGLOBAL)を引き取って Source Reader を作る */
 static HRESULT open_reader(AudioData *a, IMFSourceReader **out, int *rate, int *ch, int *durMs)
 {
@@ -110,6 +162,13 @@ static HRESULT open_reader(AudioData *a, IMFSourceReader **out, int *rate, int *
     HRESULT          hr;
 
     *out = NULL;
+    {
+        BYTE *mem = (BYTE *)GlobalLock(a->h);
+        if (mem) {
+            if (neutralize_edts(mem, a->len)) log_printf("edts removed");
+            GlobalUnlock(a->h);
+        }
+    }
     hr = CreateStreamOnHGlobal(a->h, TRUE, &stm);          /* 以後 HGLOBAL は stm が持つ */
     if (FAILED(hr)) { GlobalFree(a->h); a->h = NULL; return hr; }
     a->h = NULL;
@@ -182,6 +241,7 @@ static BOOL read_more(P *p)
             }
             if (len) memcpy(p->pcm, data, len);
             p->pcmLen = len - len % (DWORD)p->block;
+            p->decoded += p->pcmLen;
             IMFMediaBuffer_Unlock(b);
         }
         IMFMediaBuffer_Release(b);
@@ -358,6 +418,7 @@ static void do_open(P *p, AudioData *a, int gen)
     p->rate = rate;
     p->ch = ch;
     p->block = ch * 2;
+    p->decoded = 0;
     p->eos = FALSE;
     p->endedSent = FALSE;
     p->baseMs = 0;
@@ -462,7 +523,10 @@ static DWORD WINAPI player_thread(void *arg)
                     p.endedSent = TRUE;
                     close_source(&p);
                     p.eos = TRUE;
-                    notify(PEV_ENDED, g_gen);        /* 次の曲が来れば続けて流す */
+                    /* 1 サンプルも出ずに終わったのは「再生できなかった」(終わりではない)。
+                       ENDED にすると次々に飛ばして要求を使い切る(2026-10-12 の不具合) */
+                    if (p.decoded == 0) { log_printf("no samples decoded"); notify(PEV_ERROR, g_gen); }
+                    else notify(PEV_ENDED, g_gen);   /* 次の曲が来れば続けて流す */
                 } else if (padding(&p) == 0) {
                     go_idle(&p);                     /* 次が来ないまま鳴り終わった */
                 }

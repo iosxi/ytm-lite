@@ -22,7 +22,7 @@
 #include <wchar.h>
 
 #define APP_NAME     L"ytm-lite"
-#define APP_VERSION  "2"            /* .rc の VERSIONINFO と .manifest も合わせて上げる */
+#define APP_VERSION  "3"            /* .rc の VERSIONINFO と .manifest も合わせて上げる */
 
 /* 画面のスレッドへ届ける通知 */
 #define WM_APP_LIBRARY   (WM_APP + 1)   /* lParam = LibResult*  */
@@ -160,6 +160,7 @@ BOOL yt_parse_auth_text(const char *text, char **cookie, char *authuser, size_t 
 BOOL yt_cookie_ok(const char *cookie);
 char *yt_playlist_id_from_text(const char *text);      /* URL や ID から ID を取り出す */
 int  yt_selftest_jar(void);                            /* 失敗の数 */
+void yt_set_wait_hook(void (*fn)(int sec));           /* 上限で待つとき秒数を、終わったら 0 を知らせる */
 void yt_free_tracks(TrackList *t);
 void yt_free_playlists(PlaylistList *p);
 

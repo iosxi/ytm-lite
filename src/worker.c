@@ -128,9 +128,20 @@ static DWORD WINAPI worker_thread(void *arg)
     }
 }
 
+/* yt.c が上限で待つとき(このスレッドの中から呼ばれる)。先読みの待ちは画面に出さない */
+static void on_wait(int sec)
+{
+    BOOL show;
+    EnterCriticalSection(&g_cs);
+    show = g_cur && g_cur->type == JOB_AUDIO && !g_cur->prefetch;
+    LeaveCriticalSection(&g_cs);
+    if (show && g_notify) PostMessageW(g_notify, WM_APP_WAIT, (WPARAM)sec, 0);
+}
+
 void worker_start(HWND notify)
 {
     g_notify = notify;
+    yt_set_wait_hook(on_wait);
     InitializeCriticalSection(&g_cs);
     g_ev = CreateEventW(NULL, FALSE, FALSE, NULL);
     g_thread = CreateThread(NULL, 0, worker_thread, NULL, 0, NULL);

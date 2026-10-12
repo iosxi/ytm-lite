@@ -168,16 +168,7 @@ int cli_main(int argc, WCHAR **argv)
         if (err[0]) out_printf("err=%s", err);
         if (code == YT_OK) {
             out_printf("itag=%d bytes=%lu approxDurationMs=%d", ad.itag, ad.len, ad.durMs);
-            if (has_arg(argc, argv, L"-decode")) {
-                int dur = 0, rate = 0, ch = 0;
-                CoInitializeEx(NULL, COINIT_MULTITHREADED);
-                t0 = now_ms();
-                if (player_decode_test(&ad, &dur, &rate, &ch, err, sizeof(err)))
-                    out_printf("decoded: %d ms, %d Hz, %d ch (decode took %lld ms)", dur, rate, ch, now_ms() - t0);
-                else
-                    out_printf("decode failed: %s", err);
-                CoUninitialize();
-            }
+            /* 保存は復号より先に(復号は中身を引き取ってしまう) */
             if (ad.h && (a = arg_after(argc, argv, L"-save")) != NULL) {
                 HANDLE f = CreateFileW(a, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
                 DWORD  wr = 0;
@@ -187,6 +178,16 @@ int cli_main(int argc, WCHAR **argv)
                     CloseHandle(f);
                 }
                 out_printf("saved %lu bytes", wr);
+            }
+            if (has_arg(argc, argv, L"-decode")) {
+                int dur = 0, rate = 0, ch = 0;
+                CoInitializeEx(NULL, COINIT_MULTITHREADED);
+                t0 = now_ms();
+                if (player_decode_test(&ad, &dur, &rate, &ch, err, sizeof(err)))
+                    out_printf("decoded: %d ms, %d Hz, %d ch (decode took %lld ms)", dur, rate, ch, now_ms() - t0);
+                else
+                    out_printf("decode failed: %s", err);
+                CoUninitialize();
             }
             if (ad.h) GlobalFree(ad.h);
         }
@@ -239,7 +240,7 @@ int cli_main(int argc, WCHAR **argv)
         if (yt_playlist(id, &t, has_arg(argc, argv, L"-account"), &title, err, sizeof(err))) {
             print_w("title=", title);
             out_printf("tracks=%d", t.n);
-            for (i = 0; i < t.n && i < 5; i++) {
+            for (i = 0; i < t.n && i < 20; i++) {
                 char *ti = W2U(t.v[i].title), *ar = W2U(t.v[i].artist);
                 out_printf("  %s  %d:%02d  %s / %s%s", t.v[i].vid, t.v[i].dur / 60, t.v[i].dur % 60, ti ? ti : "", ar ? ar : "",
                            t.v[i].grey ? " (grey)" : "");

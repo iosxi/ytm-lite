@@ -699,9 +699,15 @@ static void start_cooldown(int sec, char *err, size_t errlen, const char *why)
     log_printf("cooldown %d sec: %s", sec, why);
 }
 
-/* 間隔と回数の上限を守るために待つ。待った秒数を UI に知らせる */
+static void (*g_waitHook)(int sec);
+
+void yt_set_wait_hook(void (*fn)(int sec)) { g_waitHook = fn; }
+
+/* 間隔と回数の上限を守るために待つ。長く待つときは g_waitHook で画面に知らせる
+   (2026-10-12: 知らせずに最大 10 分待ち、利用者には「読み込み中…」のまま止まって見えた) */
 static BOOL rate_wait(volatile LONG *cancel)
 {
+    BOOL told = FALSE;
     for (;;) {
         LONG64 now = now_ms(), wait = 0;
         LONG64 last = g_hist[(g_histPos + WINDOW_MAX - 1) % WINDOW_MAX];
@@ -709,13 +715,17 @@ static BOOL rate_wait(volatile LONG *cancel)
         if (last && now - last < MIN_GAP_MS) wait = MIN_GAP_MS - (now - last);
         if (oldest && now - oldest < WINDOW_MS && WINDOW_MS - (now - oldest) > wait) wait = WINDOW_MS - (now - oldest);
         if (wait <= 0) break;
-        if (wait > 3000) log_printf("rate limit: wait %lld ms", wait);
+        if (wait > 3000) {
+            log_printf("rate limit: wait %lld ms", wait);
+            if (g_waitHook) { g_waitHook((int)((wait + 999) / 1000)); told = TRUE; }
+        }
         while (wait > 0) {
-            if (cancel && *cancel) return FALSE;
+            if (cancel && *cancel) { if (told && g_waitHook) g_waitHook(0); return FALSE; }
             Sleep(wait > 100 ? 100 : (DWORD)wait);
             wait -= 100;
         }
     }
+    if (told && g_waitHook) g_waitHook(0);
     g_hist[g_histPos] = now_ms();
     g_histPos = (g_histPos + 1) % WINDOW_MAX;
     return TRUE;
