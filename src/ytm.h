@@ -22,7 +22,7 @@
 #include <wchar.h>
 
 #define APP_NAME     L"ytm-lite"
-#define APP_VERSION  "5"            /* .rc の VERSIONINFO と .manifest も合わせて上げる */
+#define APP_VERSION  "6"            /* .rc の VERSIONINFO と .manifest も合わせて上げる */
 
 /* 画面のスレッドへ届ける通知 */
 #define WM_APP_LIBRARY   (WM_APP + 1)   /* lParam = LibResult*  */
@@ -31,6 +31,8 @@
 #define WM_APP_PLAYER    (WM_APP + 4)   /* wParam = PEV_*, lParam = gen */
 #define WM_APP_WAIT      (WM_APP + 5)   /* wParam = 待つ秒数(0 = 待ち終わり) */
 #define WM_APP_PROGRESS  (WM_APP + 6)   /* wParam = 読んだ曲数、lParam = プレイリスト ID(char*、受け取った側が free) */
+#define WM_APP_SMTC      (WM_APP + 7)   /* wParam = SMTC のボタン(0 再生、1 一時停止、2 停止、6 次、7 前)か SMTC_SEEK、lParam = ミリ秒 */
+#define SMTC_SEEK        100
 
 /* ---------------------------------------------------------------- util.c */
 typedef struct { char *p; size_t n, cap; } Buf;
@@ -132,6 +134,13 @@ BOOL  ff_find_profile(WCHAR *out, size_t cap);
 BOOL  ff_resolve_profile(const WCHAR *given, WCHAR *out, size_t cap);   /* フォルダや exe からプロファイルへ */
 BOOL  ff_launcher_for_profile(const WCHAR *profile, WCHAR *exe, size_t cap);
 int   ff_candidates(WCHAR (*list)[MAX_PATH], int max);
+
+/* ---------------------------------------------------------------- smtc.c */
+BOOL smtc_init(HWND hwnd);
+void smtc_shutdown(void);
+void smtc_track(const WCHAR *title, const WCHAR *artist, const WCHAR *album);
+void smtc_status(int state, BOOL loading);
+void smtc_timeline(int posMs, int durMs);
 
 /* ---------------------------------------------------------------- slider.c */
 #define SLIDER_CLASS  L"ytm-slider"

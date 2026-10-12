@@ -194,6 +194,23 @@ Portable 版（PortableApps.com）のプロファイルは `FirefoxPortable\Data
 `Data\profile` を読めた。自動では、Portable 版が動いていないときはいつものプロファイル、動いているときは Portable 版を選んだ。
 本物の Firefox Portable と［music.youtube.com を開く］は確かめていない。
 
+### 2026-10-13: Windows のメディア コントロール（SMTC）に出す（v6）
+
+本人の要望: windows\muutask に再生中として出し、そこから操作したい。
+muutask は `GlobalSystemMediaTransportControlsSessionManager`（GSMTC）で読み、`SourceAppUserModelId` が空のセッションは飛ばす
+（muutask の `media.cpp`）。ytm-lite は `ISystemMediaTransportControlsInterop::GetForWindow` で SMTC を得て、
+曲名・アーティスト・アルバム、状態、位置（TimelineProperties）を出し、ButtonPressed と PlaybackPositionChangeRequested を受ける（`smtc.c`）。
+
+- C から WinRT を使う。SDK の `winrt\windows.media.h` に C 向けの宣言があるが、IID の実体は無いので、
+  C++ 側の `MIDL_INTERFACE` / `uuid` の値を写して `DEFINE_GUID` した。
+- 知らせは別のスレッドから来るので、受け手は `IAgileObject` を名乗り、`PostMessage` するだけ。
+- 位置は、変わったとき（開始・シーク・一時停止・再開）と 5 秒ごとに出す。間は Windows が進める。
+
+実測（2026-10-13、muutask と同じ GSMTC で PowerShell から読んだ）:
+`SourceAppUserModelId` は `ytm-lite.exe`（空でない。AUMID を明示しなくてよかった）。曲名・アーティスト・長さ・状態が出て、
+外からの一時停止・再生・位置の変更（100 秒）・次の曲がすべて効いた。ytm-lite を終えるとセッションは消えた。
+muutask の画面そのものは見ていない。
+
 ### 効果が無かったので戻したもの（2026-10-12）
 
 - マニフェストの `heapType=SegmentHeap`: 待機 3,136KB と 3,168KB、プレイリストを読んだ後 4,240KB と 4,224KB。差なし。

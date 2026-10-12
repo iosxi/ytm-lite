@@ -98,6 +98,8 @@ static char   g_playWhenLoaded[128];
 static WCHAR  g_status[512];
 static BOOL   g_statusErr;
 static LONG64 g_waitUntil;          /* 上限で待っている: 読み込みを始める時刻(now_ms) */
+static BOOL   g_smtcDirty;          /* SMTC に位置を知らせ直す */
+static LONG64 g_smtcLast;
 static WCHAR  g_libErr[300];        /* ライブラリを読めなかった理由(一覧の中に出す) */
 static BOOL   g_dragging;
 static int    g_lastState = -1;
@@ -396,6 +398,7 @@ static void stop_playback(const WCHAR *msg, BOOL err)
     g_waitUntil = 0;
     SendMessageW(g_seek, SLM_SETPOS, 0, 0);
     SendMessageW(g_seek, SLM_SETACTIVE, FALSE, 0);
+    smtc_status(PS_IDLE, FALSE);
     if (msg) set_status(msg, err);
     InvalidateRect(g_tracks, NULL, FALSE);
 }
@@ -407,6 +410,7 @@ static void start_track(BOOL user)
     g_gen++;
     KillTimer(g_wnd, TIMER_SKIP);
     KillTimer(g_wnd, TIMER_FETCH);
+    smtc_track(t->title, t->artist, t->album);
     update_title();
     if (g_prefVid[0] && !strcmp(g_prefVid, t->vid) && g_pref.h) {
         player_open(&g_pref, g_gen);          /* 先読み済み: すぐ鳴らす */
@@ -1089,6 +1093,9 @@ static void on_player(int ev, int gen)
         SendMessageW(g_seek, SLM_SETRANGE, dur / 1000 > 0 ? dur / 1000 : 1, 0);
         SendMessageW(g_seek, SLM_SETPOS, 0, 0);
         SendMessageW(g_seek, SLM_SETACTIVE, TRUE, 0);
+        smtc_status(PS_PLAYING, FALSE);
+        smtc_timeline(0, dur);
+        g_smtcLast = now_ms();
         ensure_timer(TRUE);
     } else if (ev == PEV_ENDED) {
         next_track(FALSE);
@@ -1101,9 +1108,19 @@ static void on_tick(void)
 {
     int st, pos, dur, gen;
     player_status(&st, &pos, &dur, &gen);
+    if (!dur && cur_track()) dur = cur_track()->dur * 1000;
     if (st != g_lastState) {
         g_lastState = st;
         InvalidateRect(g_btn[1], NULL, FALSE);
+        smtc_status(st, g_loadingAudio);            /* muutask などに再生・一時停止を知らせる */
+        g_smtcDirty = TRUE;
+    }
+    /* 位置は変わったとき(シーク・一時停止・再生し直し)と 5 秒ごとに知らせる。
+       間は Windows が進めてくれる */
+    if (cur_track() && gen == g_gen && st != PS_IDLE && (g_smtcDirty || now_ms() - g_smtcLast >= 5000)) {
+        smtc_timeline(pos, dur);
+        g_smtcDirty = FALSE;
+        g_smtcLast = now_ms();
     }
     if (st == PS_PLAYING && gen == g_gen) {
         const char *nv;
@@ -1448,6 +1465,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             else if (code == TB_ENDTRACK) {
                 g_dragging = FALSE;
                 if (cur_track()) player_seek((int)SendMessageW(g_seek, SLM_GETPOS, 0, 0) * 1000);
+                g_smtcDirty = TRUE;
             }
         } else if ((HWND)lp == g_vol) {
             g_cfg.volume = (int)SendMessageW(g_vol, SLM_GETPOS, 0, 0);
@@ -1499,12 +1517,30 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     case WM_APP_PROGRESS:
         on_progress((int)wp, (char *)lp);
         return 0;
+    case WM_APP_SMTC: {
+        /* muutask や Windows のメディアのフライアウトからの操作 */
+        int st;
+        player_status(&st, NULL, NULL, NULL);
+        switch (wp) {
+        case 0: if (st != PS_PLAYING) toggle_play(); break;          /* 再生 */
+        case 1: if (st == PS_PLAYING) toggle_play(); break;          /* 一時停止 */
+        case 2: stop_playback(NULL, FALSE); break;                    /* 停止 */
+        case 6: if (cur_track()) next_track(TRUE); break;             /* 次 */
+        case 7: prev_track(); break;                                  /* 前 */
+        case SMTC_SEEK:
+            if (cur_track() && st != PS_IDLE) { player_seek((int)lp); g_smtcDirty = TRUE; ensure_timer(TRUE); }
+            break;
+        }
+        InvalidateRect(g_btn[1], NULL, FALSE);
+        return 0;
+    }
     case WM_CLOSE:
         save_placement();
         cfg_save();
         DestroyWindow(h);
         return 0;
     case WM_DESTROY:
+        smtc_shutdown();
         player_shutdown();
         worker_stop();
         PostQuitMessage(0);
@@ -1594,6 +1630,7 @@ int ui_run(HINSTANCE inst, BOOL mute, BOOL noActivate)
     UpdateWindow(g_wnd);
 
     player_start(g_wnd, mute);
+    smtc_init(g_wnd);                   /* 失敗しても再生には差し支えない */
     player_volume(g_cfg.volume);
     worker_start(g_wnd);
     register_media_keys();
