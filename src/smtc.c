@@ -18,9 +18,14 @@
 #include <winstring.h>
 #include <initguid.h>
 #include <windows.media.h>
+#include <windows.storage.streams.h>
 #include <SystemMediaTransportControlsInterop.h>
+#include <shcore.h>
+#include <shlwapi.h>
 
 #pragma comment(lib, "runtimeobject.lib")
+#pragma comment(lib, "shcore.lib")
+#pragma comment(lib, "shlwapi.lib")
 
 /* windows.media.h の C++ 側の MIDL_INTERFACE / uuid の値(SDK 10.0.26100.0) */
 DEFINE_GUID(IID_SMTC_Interop, 0xddb0472d, 0xc911, 0x4a1f, 0x86, 0xd9, 0xdc, 0x3d, 0x71, 0xa9, 0x5f, 0x5a);
@@ -31,6 +36,9 @@ DEFINE_GUID(IID_MusicProps2, 0x00368462, 0x97d3, 0x44b9, 0xb0, 0x0f, 0x00, 0x8a,
 DEFINE_GUID(IID_ButtonHandler, 0x0557e996, 0x7b23, 0x5bae, 0xaa, 0x81, 0xea, 0x0d, 0x67, 0x11, 0x43, 0xa4);
 DEFINE_GUID(IID_PositionHandler, 0x44e34f15, 0xbdc0, 0x50a7, 0xac, 0xe4, 0x39, 0xe9, 0x1f, 0xb7, 0x53, 0xf1);
 DEFINE_GUID(IID_Agile, 0x94ea2b94, 0xe9cc, 0x49e0, 0xc0, 0xff, 0xee, 0x64, 0xca, 0x8f, 0x5b, 0x90);
+/* windows.storage.streams.h */
+DEFINE_GUID(IID_RAStream, 0x905a0fe1, 0xbc53, 0x11df, 0x8c, 0x49, 0x00, 0x1e, 0x4f, 0xc6, 0x86, 0xda);
+DEFINE_GUID(IID_RAStreamRefStatics, 0x857309dc, 0x3fbf, 0x4e7d, 0x98, 0x6f, 0xef, 0x3b, 0x1a, 0x07, 0xa9, 0x64);
 
 typedef __x_ABI_CWindows_CMedia_CISystemMediaTransportControls                 Smtc;
 typedef __x_ABI_CWindows_CMedia_CISystemMediaTransportControls2                Smtc2;
@@ -211,6 +219,8 @@ void smtc_track(const WCHAR *title, const WCHAR *artist, const WCHAR *album)
         }
         __x_ABI_CWindows_CMedia_CIMusicDisplayProperties_Release(m);
     }
+    /* 前の曲の画像は外す(新しい画像は smtc_thumbnail で後から届く) */
+    __x_ABI_CWindows_CMedia_CISystemMediaTransportControlsDisplayUpdater_put_Thumbnail(u, NULL);
     __x_ABI_CWindows_CMedia_CISystemMediaTransportControlsDisplayUpdater_Update(u);
     __x_ABI_CWindows_CMedia_CISystemMediaTransportControlsDisplayUpdater_Release(u);
 }
@@ -223,6 +233,39 @@ void smtc_status(int state, BOOL loading)
     s = state == PS_PLAYING ? MediaPlaybackStatus_Playing : state == PS_PAUSED ? MediaPlaybackStatus_Paused
       : loading ? MediaPlaybackStatus_Changing : MediaPlaybackStatus_Stopped;
     __x_ABI_CWindows_CMedia_CISystemMediaTransportControls_put_PlaybackStatus(g_smtc, s);
+}
+
+/* ジャケット画像(JPEG などのバイト列)を渡す。メモリの IStream を WinRT のストリームにして
+   RandomAccessStreamReference.CreateFromStream で包む(一時ファイルは作らない)。
+   読む側(muutask など)がストリームを開くと、このプロセスの中のメモリから読まれる */
+void smtc_thumbnail(const BYTE *data, DWORD len)
+{
+    Updater *u = NULL;
+    IStream *stm = NULL;
+    __x_ABI_CWindows_CStorage_CStreams_CIRandomAccessStream                *ras = NULL;
+    __x_ABI_CWindows_CStorage_CStreams_CIRandomAccessStreamReferenceStatics *st = NULL;
+    __x_ABI_CWindows_CStorage_CStreams_CIRandomAccessStreamReference       *ref = NULL;
+    HSTRING cls;
+
+    if (!g_smtc) return;
+    if (FAILED(__x_ABI_CWindows_CMedia_CISystemMediaTransportControls_get_DisplayUpdater(g_smtc, &u))) return;
+    if (data && len) {
+        stm = SHCreateMemStream(data, len);
+        if (stm && SUCCEEDED(CreateRandomAccessStreamOverStream(stm, BSOS_DEFAULT, &IID_RAStream, (void **)&ras))) {
+            cls = hs(RuntimeClass_Windows_Storage_Streams_RandomAccessStreamReference);
+            if (SUCCEEDED(RoGetActivationFactory(cls, &IID_RAStreamRefStatics, (void **)&st))) {
+                __x_ABI_CWindows_CStorage_CStreams_CIRandomAccessStreamReferenceStatics_CreateFromStream(st, ras, &ref);
+                __x_ABI_CWindows_CStorage_CStreams_CIRandomAccessStreamReferenceStatics_Release(st);
+            }
+            WindowsDeleteString(cls);
+        }
+    }
+    __x_ABI_CWindows_CMedia_CISystemMediaTransportControlsDisplayUpdater_put_Thumbnail(u, ref);   /* NULL なら外す */
+    __x_ABI_CWindows_CMedia_CISystemMediaTransportControlsDisplayUpdater_Update(u);
+    if (ref) __x_ABI_CWindows_CStorage_CStreams_CIRandomAccessStreamReference_Release(ref);
+    if (ras) __x_ABI_CWindows_CStorage_CStreams_CIRandomAccessStream_Release(ras);
+    if (stm) IStream_Release(stm);
+    __x_ABI_CWindows_CMedia_CISystemMediaTransportControlsDisplayUpdater_Release(u);
 }
 
 void smtc_timeline(int posMs, int durMs)

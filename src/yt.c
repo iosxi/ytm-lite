@@ -508,6 +508,26 @@ static WCHAR *flex_text(J *r, int col)
     return JText(JPath(c, "musicResponsiveListItemFlexColumnRenderer.text"));
 }
 
+/* 一番大きい画像の URL。正方形のジャケット(lh3 / yt3 の「=w60-h60-…」)は 150x150 に指定し直す
+   (Chrome の YouTube Music が SMTC に渡しているのと同じ大きさ。muutask の DEVELOPMENT.md) */
+static char *thumb_url(J *arr)
+{
+    J          *t, *last = NULL;
+    const char *u;
+    const char *eq;
+    for (t = arr ? arr->child : NULL; t; t = t->next) last = t;
+    u = JStr(last, "url");
+    if (!u || strncmp(u, "https://", 8)) return NULL;
+    eq = strrchr(u, '=');
+    if (eq && eq[1] == 'w' && strstr(eq, "-h")) {
+        Buf b = {0};
+        BufAdd(&b, u, (size_t)(eq - u));
+        BufAddStr(&b, "=w150-h150-l90-rj");
+        return BufTake(&b);
+    }
+    return U8Dup(u);
+}
+
 static void add_track(TrackList *t, J *r)
 {
     const char *vid = JStr(r, "playlistItemData.videoId");
@@ -539,6 +559,7 @@ static void add_track(TrackList *t, J *r)
         free(d);
     }
     k->grey = pol && !strcmp(pol, "MUSIC_ITEM_RENDERER_DISPLAY_POLICY_GREY_OUT");
+    k->thumb = thumb_url(JPath(r, "thumbnail.musicThumbnailRenderer.thumbnail.thumbnails"));
 }
 
 /* 続きの合図: 新しい形(continuationItemRenderer)と古い形(nextContinuationData) */
@@ -926,6 +947,24 @@ done:
     return code;
 }
 
+/* ジャケット画像を取る(画像のサーバーへ。cookie は付けない。曲が変わったときに 1 回だけ) */
+int yt_fetch_thumb(const char *url, Buf *out, char *err, size_t errlen)
+{
+    HttpResp r;
+    memset(out, 0, sizeof(*out));
+    if (!HttpGet(url, "User-Agent: " DEFAULT_UA "\r\nAccept: image/avif,image/webp,image/*,*/*;q=0.8\r\n", &r, err, errlen)) return 0;
+    if (r.status != 200 || r.body.n == 0 || r.body.n > 512 * 1024) {
+        _snprintf(err, errlen, "画像: HTTP %d、%u バイト", r.status, (unsigned)r.body.n);
+        HttpRespFree(&r);
+        return 0;
+    }
+    *out = r.body;
+    memset(&r.body, 0, sizeof(r.body));
+    HttpRespFree(&r);
+    log_printf("thumbnail %u bytes", (unsigned)out->n);
+    return 1;
+}
+
 void yt_free_tracks(TrackList *t)
 {
     int i;
@@ -933,6 +972,7 @@ void yt_free_tracks(TrackList *t)
         free(t->v[i].title);
         free(t->v[i].artist);
         free(t->v[i].album);
+        free(t->v[i].thumb);
     }
     free(t->v);
     memset(t, 0, sizeof(*t));

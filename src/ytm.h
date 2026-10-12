@@ -22,7 +22,7 @@
 #include <wchar.h>
 
 #define APP_NAME     L"ytm-lite"
-#define APP_VERSION  "6"            /* .rc の VERSIONINFO と .manifest も合わせて上げる */
+#define APP_VERSION  "7"            /* .rc の VERSIONINFO と .manifest も合わせて上げる */
 
 /* 画面のスレッドへ届ける通知 */
 #define WM_APP_LIBRARY   (WM_APP + 1)   /* lParam = LibResult*  */
@@ -33,6 +33,7 @@
 #define WM_APP_PROGRESS  (WM_APP + 6)   /* wParam = 読んだ曲数、lParam = プレイリスト ID(char*、受け取った側が free) */
 #define WM_APP_SMTC      (WM_APP + 7)   /* wParam = SMTC のボタン(0 再生、1 一時停止、2 停止、6 次、7 前)か SMTC_SEEK、lParam = ミリ秒 */
 #define SMTC_SEEK        100
+#define WM_APP_THUMB     (WM_APP + 8)   /* lParam = ThumbResult*(受け取った側が free) */
 
 /* ---------------------------------------------------------------- util.c */
 typedef struct { char *p; size_t n, cap; } Buf;
@@ -112,6 +113,7 @@ typedef struct {
     int   x, y, w, h, maximized;
     int   theme;                /* 0 = システムに合わせる、1 = ライト、2 = ダーク */
     int   mediakeys;            /* キーボードのメディアキーを横取りする */
+    int   thumbnail;            /* ジャケット画像を SMTC に渡す */
     int   debug;
     char  lastPlaylist[128];
 } Config;
@@ -141,6 +143,7 @@ void smtc_shutdown(void);
 void smtc_track(const WCHAR *title, const WCHAR *artist, const WCHAR *album);
 void smtc_status(int state, BOOL loading);
 void smtc_timeline(int posMs, int durMs);
+void smtc_thumbnail(const BYTE *data, DWORD len);   /* NULL で外す */
 
 /* ---------------------------------------------------------------- slider.c */
 #define SLIDER_CLASS  L"ytm-slider"
@@ -166,6 +169,7 @@ typedef struct {
     WCHAR *title, *artist, *album;
     int    dur;         /* 秒。不明は 0 */
     BOOL   grey;        /* YouTube Music 上で灰色(再生できない)の曲 */
+    char  *thumb;       /* ジャケット画像の URL(SMTC に渡す。無ければ NULL) */
 } Track;
 
 typedef struct { Track *v; int n, cap; } TrackList;
@@ -194,6 +198,7 @@ int  yt_fetch_audio(const char *vid, AudioData *out, volatile LONG *cancel, char
 BOOL yt_parse_auth_text(const char *text, char **cookie, char *authuser, size_t aulen, char *ua, size_t ualen);
 BOOL yt_cookie_ok(const char *cookie);
 char *yt_playlist_id_from_text(const char *text);      /* URL や ID から ID を取り出す */
+int  yt_fetch_thumb(const char *url, Buf *out, char *err, size_t errlen);
 int  yt_selftest_jar(void);                            /* 失敗の数 */
 void yt_set_wait_hook(void (*fn)(int sec));           /* 上限で待つとき秒数を、終わったら 0 を知らせる */
 void yt_set_progress_hook(void (*fn)(const char *id, int count));   /* プレイリストを 1 ページ読むごと */
@@ -218,6 +223,8 @@ void worker_library(void);
 void worker_playlist(const char *id, BOOL useAccount);
 void worker_audio(const char *vid, int gen, BOOL prefetch);  /* 新しい再生の依頼は古い依頼を取り消す */
 void worker_cancel_audio(void);
+void worker_thumb(const char *url, int gen);                 /* 結果は WM_APP_THUMB(lParam = ThumbResult*) */
+typedef struct { int gen; Buf data; } ThumbResult;
 void free_audio_result(AudioResult *r);
 
 /* ---------------------------------------------------------------- player.c */

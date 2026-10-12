@@ -13,7 +13,7 @@
 
 #include "ytm.h"
 
-enum { JOB_LIBRARY = 1, JOB_PLAYLIST, JOB_AUDIO };
+enum { JOB_LIBRARY = 1, JOB_PLAYLIST, JOB_AUDIO, JOB_THUMB };
 
 typedef struct Job {
     struct Job *next;
@@ -46,6 +46,7 @@ static void post(UINT msg, void *p)
         if (msg == WM_APP_AUDIO) free_audio_result((AudioResult *)p);
         else if (msg == WM_APP_LIBRARY) { yt_free_playlists(&((LibResult *)p)->pls); free(p); }
         else if (msg == WM_APP_PLAYLIST) { PlResult *r = (PlResult *)p; yt_free_tracks(&r->tracks); free(r->id); free(r->title); free(r); }
+        else if (msg == WM_APP_THUMB) { BufFree(&((ThumbResult *)p)->data); free(p); }
     }
 }
 
@@ -110,6 +111,14 @@ static DWORD WINAPI worker_thread(void *arg)
                 if (r) {
                     r->ok = yt_library(&r->pls, r->err, sizeof(r->err));
                     post(WM_APP_LIBRARY, r);
+                }
+            } else if (j->type == JOB_THUMB) {
+                ThumbResult *r = (ThumbResult *)calloc(1, sizeof(ThumbResult));
+                char err[256];
+                if (r) {
+                    r->gen = j->gen;
+                    if (yt_fetch_thumb(j->id, &r->data, err, sizeof(err))) post(WM_APP_THUMB, r);
+                    else { log_printf("thumbnail failed: %s", err); free(r); }
                 }
             } else if (j->type == JOB_PLAYLIST) {
                 PlResult *r = (PlResult *)calloc(1, sizeof(PlResult));
@@ -248,6 +257,24 @@ void worker_audio(const char *vid, int gen, BOOL prefetch)
     j->gen = gen;
     j->prefetch = prefetch;
     push(j, TRUE);
+}
+
+/* 曲の画像。待っている古い画像の依頼は捨てる(いま鳴る曲の分だけでよい) */
+void worker_thumb(const char *url, int gen)
+{
+    Job *j, **pp;
+    EnterCriticalSection(&g_cs);
+    for (pp = &g_head; *pp;) {
+        if ((*pp)->type == JOB_THUMB) { j = *pp; *pp = j->next; free_job(j); }
+        else pp = &(*pp)->next;
+    }
+    LeaveCriticalSection(&g_cs);
+    j = (Job *)calloc(1, sizeof(Job));
+    if (!j) return;
+    j->type = JOB_THUMB;
+    j->id = U8Dup(url);
+    j->gen = gen;
+    push(j, FALSE);
 }
 
 void worker_cancel_audio(void)

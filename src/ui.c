@@ -411,6 +411,9 @@ static void start_track(BOOL user)
     KillTimer(g_wnd, TIMER_SKIP);
     KillTimer(g_wnd, TIMER_FETCH);
     smtc_track(t->title, t->artist, t->album);
+    /* ジャケット画像はこちらで取って、バイト列で渡す。URL のまま渡す方式(CreateFromUri)は
+       Windows の通信部品が 12 個読み込まれ、Working Set が 7MB 増えたのでやめた(2026-10-13 実測) */
+    if (g_cfg.thumbnail && t->thumb) worker_thumb(t->thumb, g_gen);   /* 届いたら WM_APP_THUMB */
     update_title();
     if (g_prefVid[0] && !strcmp(g_prefVid, t->vid) && g_pref.h) {
         player_open(&g_pref, g_gen);          /* 先読み済み: すぐ鳴らす */
@@ -1517,6 +1520,13 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     case WM_APP_PROGRESS:
         on_progress((int)wp, (char *)lp);
         return 0;
+    case WM_APP_THUMB: {
+        ThumbResult *r = (ThumbResult *)lp;
+        if (r->gen == g_gen) smtc_thumbnail((const BYTE *)r->data.p, (DWORD)r->data.n);   /* 古い曲の画像は捨てる */
+        BufFree(&r->data);
+        free(r);
+        return 0;
+    }
     case WM_APP_SMTC: {
         /* muutask や Windows のメディアのフライアウトからの操作 */
         int st;

@@ -211,6 +211,27 @@ muutask は `GlobalSystemMediaTransportControlsSessionManager`（GSMTC）で読�
 外からの一時停止・再生・位置の変更（100 秒）・次の曲がすべて効いた。ytm-lite を終えるとセッションは消えた。
 muutask の画面そのものは見ていない。
 
+### 2026-10-13: ジャケット画像を SMTC に渡す（v7）
+
+本人の質問: サムネイルを出すとメモリは増えるか、50MB を超えるか。測ってから入れた。
+
+- 画像の URL はプレイリストの応答に入っている（`thumbnail.musicThumbnailRenderer.thumbnail.thumbnails` の最後）。
+  正方形のジャケット（lh3 / yt3 の `=w60-h60…`）は `=w150-h150-l90-rj` にする（Chrome の YouTube Music が渡す大きさ）。
+  動画の静止画（i.ytimg.com、400x225）はそのまま。曲が変わったときに 1 回だけ、cookie なしで画像のサーバーから取る（約 12KB）。
+- 渡し方を 2 つ比べた（「マイベスト」1 曲目、音量 0、再生中）:
+
+  | 方式 | Private | Working Set | DLL |
+  | --- | --- | --- | --- |
+  | 画像なし | 14.8 MB | 45.8 MB | 81 |
+  | URL のまま（`CreateFromUri`） | 16.0 MB | 52.8 MB | 93 |
+  | 自分で取ってバイト列（`SHCreateMemStream` → `CreateRandomAccessStreamOverStream` → `CreateFromStream`） | 15.2 MB | 46.9 MB | 81 |
+
+  URL のままだと Windows の通信部品が読み込まれて重いので、バイト列にした。タスクマネージャーの「メモリ」と同じ
+  プライベート ワーキングセットでは、画像なし 13.5MB・画像あり 13.2MB で差は揺れの範囲。
+- 読めるかは、muutask の `ReadThumbnail` と同じ手順（`OpenReadAsync` → `Size` → `ReadAsync`）の C++/WinRT の小さな読み手で確かめた。
+  11,959 バイト、先頭 `FF D8`（JPEG）。**PowerShell 5.1 からは読めない**（WinRT の型を扱えず `IInputStream` への変換で
+  `E_NOINTERFACE`）ので、それを見て「開けない」と判断しないこと。
+
 ### 効果が無かったので戻したもの（2026-10-12）
 
 - マニフェストの `heapType=SegmentHeap`: 待機 3,136KB と 3,168KB、プレイリストを読んだ後 4,240KB と 4,224KB。差なし。

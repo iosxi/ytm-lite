@@ -130,6 +130,7 @@ void cfg_load(void)
     g_cfg.maximized = get_int(L"maximized", 0);
     g_cfg.theme     = get_int(L"theme", 0);
     g_cfg.mediakeys = get_int(L"mediakeys", 1);
+    g_cfg.thumbnail = get_int(L"thumbnail", 1);
     g_cfg.debug     = get_int(L"debug", 0);
     get_str(L"authuser", g_cfg.authuser, sizeof(g_cfg.authuser));
     get_str(L"ua", g_cfg.ua, sizeof(g_cfg.ua));
