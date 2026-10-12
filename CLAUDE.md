@@ -1,7 +1,7 @@
-# yum-lite の作業メモ
+# ytm-lite の作業メモ
 
 `C:\projects\windows\CLAUDE.md` の共通方針に加えて、このプロジェクト固有のこと。
-フォルダ名は `ytm-lite`、アプリ名・exe は `yum-lite`（本人の指定、2026-10-12）。
+フォルダ名・アプリ名・exe とも `ytm-lite`（本人の指定、2026-10-12。v1 は `yum-lite` と取り違えて作り、v2 で直した）。
 
 ## 目的と範囲
 
@@ -27,18 +27,18 @@
 - 利用者の ini を使わない。`-ini <スクラッチの ini>` で動かす（cookie も visitor もクールダウンも ini ごと）。
 - 再生部分（復号、WASAPI、メモリ）は通信せずに確かめられる: `-probe <id> -save x.m4a` で 1 曲保存しておき、
   `-playtest x.m4a` で何度でも鳴らす（音量 0）。
-- ログは ini に `debug=1` を書くと、ini と同じフォルダの `yum-lite.log` に出る（要求ごとに 1 行）。
+- ログは ini に `debug=1` を書くと、ini と同じフォルダの `ytm-lite.log` に出る（要求ごとに 1 行）。
 
 ## 確かめ方
 
-- 通信しない検査: `yum-lite.exe -selftest | cat`
+- 通信しない検査: `ytm-lite.exe -selftest | cat`
 - 通信の確認: `-probe <videoId> [-decode]`、`-playlist <ID か URL> [-account]`、`-library`、`-setauth <ファイル>`
-- 画面: `yum-lite.exe -ini <検証用 ini> -mute -noactivate`（音量 0、前面に出さない）。
+- 画面: `ytm-lite.exe -ini <検証用 ini> -mute -noactivate`（音量 0、前面に出さない）。
   操作は `tools/post.ps1`（`PostMessage`。`WM_HOTKEY` 1=再生/一時停止 2=次 3=前 4=停止、
   `WM_COMMAND` でボタン ID）、撮影は `tools/snap.ps1`（その窓だけを `PrintWindow`）。
 - ini のパスごとに二重起動を判定するので、利用者が動かしている本番と並べて動かせる。
 
 ## 版を上げるとき
 
-`src/yum.h` の `APP_VERSION`、`src/yum-lite.rc` の VERSIONINFO、`src/yum-lite.manifest` の
+`src/ytm.h` の `APP_VERSION`、`src/ytm-lite.rc` の VERSIONINFO、`src/ytm-lite.manifest` の
 `assemblyIdentity` をまとめて上げる。

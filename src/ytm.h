@@ -1,7 +1,7 @@
 /* ==================================================================
- * yum.h - yum-lite 全体で共有する宣言
+ * ytm.h - ytm-lite 全体で共有する宣言
  *
- *  yum-lite は YouTube Music の自分のプレイリストを再生するだけの
+ *  ytm-lite は YouTube Music の自分のプレイリストを再生するだけの
  *  ネイティブアプリ。ブラウザを使わず、メモリを最小にすることが目的。
  *
  *  通信は 2 系統に分けている(DEVELOPMENT.md「安全のための作法」)。
@@ -10,8 +10,8 @@
  *   - 再生      : www.youtube.com の player を、cookie なしの匿名で呼ぶ
  *                 (VISIONOS クライアント。PO トークンも JS も要らない)。
  * ================================================================== */
-#ifndef YUM_H
-#define YUM_H
+#ifndef YTM_H
+#define YTM_H
 
 #define COBJMACROS
 #include <windows.h>
@@ -21,8 +21,8 @@
 #include <string.h>
 #include <wchar.h>
 
-#define APP_NAME     L"yum-lite"
-#define APP_VERSION  "1"            /* .rc の VERSIONINFO と .manifest も合わせて上げる */
+#define APP_NAME     L"ytm-lite"
+#define APP_VERSION  "2"            /* .rc の VERSIONINFO と .manifest も合わせて上げる */
 
 /* 画面のスレッドへ届ける通知 */
 #define WM_APP_LIBRARY   (WM_APP + 1)   /* lParam = LibResult*  */
@@ -49,7 +49,7 @@ char  *U8NDup(const char *s, size_t n);
 WCHAR *WDup(const WCHAR *s);
 const char *U8FindI(const char *hay, const char *needle);
 void  Sha1Hex(const char *s, char out[41]);
-void  log_printf(const char *fmt, ...);          /* debug=1 のときだけ yum-lite.log へ */
+void  log_printf(const char *fmt, ...);          /* debug=1 のときだけ ytm-lite.log へ */
 void  out_printf(const char *fmt, ...);          /* -probe などの結果を標準出力へ(UTF-8) */
 LONG64 now_ms(void);                             /* 起動からのミリ秒(GetTickCount64) */
 LONG64 unix_time(void);

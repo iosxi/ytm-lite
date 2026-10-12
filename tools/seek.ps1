@@ -1,4 +1,4 @@
-# Move yum-lite's seek bar to a position (seconds) without input events. Test helper.
+# Move ytm-lite's seek bar to a position (seconds) without input events. Test helper.
 #   powershell -File tools\seek.ps1 -ProcId <PID> -Sec <seconds>
 # Finds the first trackbar (the seek bar), sets its position with TBM_SETPOS (no pointers),
 # then posts WM_HSCROLL(TB_ENDTRACK) to the main window, which performs the seek.
@@ -20,7 +20,7 @@ public static class K {
         EnumWindows((h, l) => {
             uint pid; GetWindowThreadProcessId(h, out pid);
             var sb = new StringBuilder(64); GetClassName(h, sb, 64);
-            if (pid == want && sb.ToString() == "yum-lite") { found = h; return false; }
+            if (pid == want && sb.ToString() == "ytm-lite") { found = h; return false; }
             return true;
         }, IntPtr.Zero);
         return found;

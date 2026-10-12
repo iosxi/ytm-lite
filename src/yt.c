@@ -25,7 +25,7 @@
  *     自動で何度もやり直すことはしない(GVS の 403 だけ、worker.c が 5 秒おいて 1 回)。
  * ================================================================== */
 
-#include "yum.h"
+#include "ytm.h"
 
 #define MUSIC_ORIGIN   "https://music.youtube.com"
 #define MUSIC_API      "https://music.youtube.com/youtubei/v1/"

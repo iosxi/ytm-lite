@@ -1,24 +1,24 @@
 /* ==================================================================
  * main.c - 入口
  *
- *  yum-lite.exe                     画面を出す
- *  yum-lite.exe -ini <path>         別の ini で動かす(二重起動の判定も ini ごと)
- *  yum-lite.exe -mute               音量 0 で鳴らす(検証用。処理は同じ)
- *  yum-lite.exe -noactivate         窓を前面に出さずに開く(検証用。利用者の操作を邪魔しない)
+ *  ytm-lite.exe                     画面を出す
+ *  ytm-lite.exe -ini <path>         別の ini で動かす(二重起動の判定も ini ごと)
+ *  ytm-lite.exe -mute               音量 0 で鳴らす(検証用。処理は同じ)
+ *  ytm-lite.exe -noactivate         窓を前面に出さずに開く(検証用。利用者の操作を邪魔しない)
  *
  *  画面を出さずに確かめる入口(結果は標準出力に UTF-8 で。bash なら | cat で読む):
- *  yum-lite.exe -selftest                   通信しない検査
- *  yum-lite.exe -probe <videoId> [-decode] [-save <m4a>]
+ *  ytm-lite.exe -selftest                   通信しない検査
+ *  ytm-lite.exe -probe <videoId> [-decode] [-save <m4a>]
  *                                           匿名の player と音声の取得(-decode で最後まで復号)
- *  yum-lite.exe -playtest <m4a> [-seconds N]  手元のファイルを音量 0 で鳴らしメモリを報告(通信しない)
- *  yum-lite.exe -playlist <ID か URL> [-account]   プレイリストを読む(既定は匿名)
- *  yum-lite.exe -library                    ライブラリのプレイリスト一覧(要ログイン情報)
- *  yum-lite.exe -setauth <file>             ファイルの中身(要求ヘッダーなど)をログイン情報にする
+ *  ytm-lite.exe -playtest <m4a> [-seconds N]  手元のファイルを音量 0 で鳴らしメモリを報告(通信しない)
+ *  ytm-lite.exe -playlist <ID か URL> [-account]   プレイリストを読む(既定は匿名)
+ *  ytm-lite.exe -library                    ライブラリのプレイリスト一覧(要ログイン情報)
+ *  ytm-lite.exe -setauth <file>             ファイルの中身(要求ヘッダーなど)をログイン情報にする
  *
  *  通信する入口は、いずれも yt.c の作法(間隔・回数・拒まれたら止める)の内側で動く。
  * ================================================================== */
 
-#include "yum.h"
+#include "ytm.h"
 #include <shellapi.h>
 #include <objbase.h>
 #include <psapi.h>

@@ -2,12 +2,12 @@
 #include <windows.h>
 #include "resource.h"
 
-IDI_APP ICON "yum-lite.ico"
-1 RT_MANIFEST "yum-lite.manifest"
+IDI_APP ICON "ytm-lite.ico"
+1 RT_MANIFEST "ytm-lite.manifest"
 
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION     1,0,0,0
-PRODUCTVERSION  1,0,0,0
+FILEVERSION     2,0,0,0
+PRODUCTVERSION  2,0,0,0
 FILEFLAGSMASK   0x3fL
 FILEFLAGS       0x0L
 FILEOS          VOS_NT_WINDOWS32
@@ -18,12 +18,12 @@ BEGIN
     BEGIN
         BLOCK "041104b0"
         BEGIN
-            VALUE "FileDescription",  "yum-lite - YouTube Music のプレイリストを再生するだけの軽いアプリ"
-            VALUE "FileVersion",      "1"
-            VALUE "InternalName",     "yum-lite"
-            VALUE "OriginalFilename", "yum-lite.exe"
-            VALUE "ProductName",      "yum-lite"
-            VALUE "ProductVersion",   "1"
+            VALUE "FileDescription",  "ytm-lite - YouTube Music のプレイリストを再生するだけの軽いアプリ"
+            VALUE "FileVersion",      "2"
+            VALUE "InternalName",     "ytm-lite"
+            VALUE "OriginalFilename", "ytm-lite.exe"
+            VALUE "ProductName",      "ytm-lite"
+            VALUE "ProductVersion",   "2"
         END
     END
     BLOCK "VarFileInfo"

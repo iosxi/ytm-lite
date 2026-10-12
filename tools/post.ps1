@@ -1,4 +1,4 @@
-﻿# yum-lite の窓へメッセージを PostMessage する(キー操作は送らない)。検証用。
+﻿# ytm-lite の窓へメッセージを PostMessage する(キー操作は送らない)。検証用。
 #   powershell -File tools\post.ps1 -ProcId <PID> -Msg <番号> [-WParam n] [-LParam n]
 #   例: WM_COMMAND(0x111) で再生ボタン(202)  -> -Msg 0x111 -WParam 202
 #       WM_HOTKEY(0x312) 1=再生/一時停止 2=次 3=前 4=停止
@@ -18,7 +18,7 @@ public static class P {
         EnumWindows((h, l) => {
             uint pid; GetWindowThreadProcessId(h, out pid);
             var sb = new StringBuilder(64); GetClassName(h, sb, 64);
-            if (pid == want && sb.ToString() == "yum-lite") { found = h; return false; }
+            if (pid == want && sb.ToString() == "ytm-lite") { found = h; return false; }
             return true;
         }, IntPtr.Zero);
         return found;

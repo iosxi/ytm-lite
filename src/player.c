@@ -15,7 +15,7 @@
  *  - 既定の再生デバイスが変わったら(2 秒ごとに見る)、いまの位置から付け替える。
  * ================================================================== */
 
-#include "yum.h"
+#include "ytm.h"
 #include <mfapi.h>
 #include <mfidl.h>
 #include <mfreadwrite.h>

@@ -2,7 +2,7 @@
  * util.c - 文字列・バッファ・ハッシュ・ログの小道具
  * ================================================================== */
 
-#include "yum.h"
+#include "ytm.h"
 #include <stdarg.h>
 #include <bcrypt.h>
 
@@ -190,7 +190,7 @@ void log_printf(const char *fmt, ...)
     if (n < 0 || n > (int)sizeof(line) - 3) n = (int)sizeof(line) - 3;
     line[n++] = '\r';
     line[n++] = '\n';
-    _snwprintf(path, MAX_PATH, L"%s\\yum-lite.log", g_cfg.dir);
+    _snwprintf(path, MAX_PATH, L"%s\\ytm-lite.log", g_cfg.dir);
     path[MAX_PATH - 1] = 0;
     EnterCriticalSection(&g_logCs);
     f = CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);

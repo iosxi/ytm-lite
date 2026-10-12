@@ -1,4 +1,4 @@
-﻿# yum-lite の窓だけを撮る(前面に出さない)。検証用。
+﻿# ytm-lite の窓だけを撮る(前面に出さない)。検証用。
 #   powershell -File tools\snap.ps1 -ProcId <PID> -Out <png> [-Scale 0.5]
 param([int]$ProcId, [string]$Out, [double]$Scale = 0.5)
 Add-Type -AssemblyName System.Drawing
@@ -20,7 +20,7 @@ public static class W {
         EnumWindows((h, l) => {
             uint pid; GetWindowThreadProcessId(h, out pid);
             var sb = new StringBuilder(64); GetClassName(h, sb, 64);
-            if (pid == want && sb.ToString() == "yum-lite") { found = h; return false; }
+            if (pid == want && sb.ToString() == "ytm-lite") { found = h; return false; }
             return true;
         }, IntPtr.Zero);
         return found;

@@ -1,17 +1,17 @@
 /* ==================================================================
- * config.c - 設定(exe の隣の yum-lite.ini、または -ini で指定したもの)
+ * config.c - 設定(exe の隣の ytm-lite.ini、または -ini で指定したもの)
  *
  *  cookie はアカウントの鍵そのものなので、平文では置かない。DPAPI(CryptProtectData)で
  *  暗号化して 16 進で書く。同じ Windows ユーザーでしか戻せない。
  *  レジストリには何も書かない。
  * ================================================================== */
 
-#include "yum.h"
+#include "ytm.h"
 #include <dpapi.h>
 
 #pragma comment(lib, "crypt32.lib")
 
-#define SEC L"yum-lite"
+#define SEC L"ytm-lite"
 
 Config g_cfg;
 
@@ -23,7 +23,7 @@ void cfg_init_path(const WCHAR *iniArg)
     } else {
         GetModuleFileNameW(NULL, g_cfg.ini, MAX_PATH);
         slash = wcsrchr(g_cfg.ini, L'\\');
-        if (slash) wcscpy_s(slash + 1, MAX_PATH - (slash + 1 - g_cfg.ini), L"yum-lite.ini");
+        if (slash) wcscpy_s(slash + 1, MAX_PATH - (slash + 1 - g_cfg.ini), L"ytm-lite.ini");
     }
     wcscpy_s(g_cfg.dir, MAX_PATH, g_cfg.ini);
     slash = wcsrchr(g_cfg.dir, L'\\');
@@ -104,7 +104,7 @@ static char *protect(const char *s)
     DWORD     i;
     in.pbData = (BYTE *)s;
     in.cbData = (DWORD)strlen(s);
-    if (!CryptProtectData(&in, L"yum-lite", NULL, NULL, NULL, CRYPTPROTECT_UI_FORBIDDEN, &out)) return NULL;
+    if (!CryptProtectData(&in, L"ytm-lite", NULL, NULL, NULL, CRYPTPROTECT_UI_FORBIDDEN, &out)) return NULL;
     hex = (char *)malloc((size_t)out.cbData * 2 + 1);
     if (hex) {
         for (i = 0; i < out.cbData; i++) sprintf(hex + i * 2, "%02x", out.pbData[i]);

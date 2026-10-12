@@ -9,7 +9,7 @@
  *  - リダイレクトは WinHTTP に任せる(GVS は別のサーバーへ 302 で回すことがある)。
  * ================================================================== */
 
-#include "yum.h"
+#include "ytm.h"
 #include <winhttp.h>
 
 #pragma comment(lib, "winhttp.lib")

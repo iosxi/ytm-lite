@@ -15,7 +15,7 @@
  *   - 先読みは次の曲 1 つだけ、終わる 40 秒前から。
  * ================================================================== */
 
-#include "yum.h"
+#include "ytm.h"
 #include "resource.h"
 #include <windowsx.h>
 #include <shellapi.h>
@@ -24,8 +24,8 @@
 #pragma comment(lib, "gdi32.lib")
 #pragma comment(lib, "user32.lib")
 
-#define CLASS_NAME   L"yum-lite"
-#define PROP_INI     L"yum.ini"
+#define CLASS_NAME   L"ytm-lite"
+#define PROP_INI     L"ytm.ini"
 
 #define IDC_PLS      100
 #define IDC_TRACKS   101
@@ -704,7 +704,7 @@ static LRESULT CALLBACK trackbar_subclass(HWND h, UINT msg, WPARAM wp, LPARAM lp
 
 static const WCHAR AUTH_HELP[] =
     L"自分のプレイリストを読むために、YouTube Music にログインしているブラウザの cookie を使います"
-    L"(曲の再生にはアカウントを使いません)。cookie は暗号化して yum-lite.ini に保存します。\r\n\r\n"
+    L"(曲の再生にはアカウントを使いません)。cookie は暗号化して ytm-lite.ini に保存します。\r\n\r\n"
     L"1. ブラウザのシークレット(InPrivate)ウィンドウで music.youtube.com を開き、ログインする\r\n"
     L"2. F12 で開発者ツールを開き、[ネットワーク] を「browse」で絞り込む\r\n"
     L"3. ライブラリを開くなどして出てきた browse(POST)を選び、[要求ヘッダー] の cookie の値"
@@ -1365,7 +1365,7 @@ int ui_run(HINSTANCE inst, BOOL mute, BOOL noActivate)
     int    x, y, w, h;
 
     g_mute = mute;
-    _snwprintf(mname, ARRAYSIZE(mname), L"Local\\yum-lite-%08lx", hsh);
+    _snwprintf(mname, ARRAYSIZE(mname), L"Local\\ytm-lite-%08lx", hsh);
     mtx = CreateMutexW(NULL, TRUE, mname);
     if (mtx && GetLastError() == ERROR_ALREADY_EXISTS) {
         EnumWindows(find_other, (LPARAM)hsh);

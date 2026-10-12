@@ -1,4 +1,4 @@
-# yum-lite 開発メモ
+# ytm-lite 開発メモ
 
 実装の判断の根拠と、実測の記録。使い方は README.md。
 
@@ -77,19 +77,19 @@ visitorData（458 字）が得られ、続く player は `OK`。先にボット�
 
 ### 2026-10-12: メモリと CPU（Windows 11、この PC）
 
-同じ公開プレイリストの同じ曲（3:54、itag 140 で 3.6MB）を再生中の値。yum-lite は `-mute`、Chrome は
+同じ公開プレイリストの同じ曲（3:54、itag 140 で 3.6MB）を再生中の値。ytm-lite は `-mute`、Chrome は
 `--headless=new --mute-audio`（使い捨てのプロファイル、UA は通常の Chrome 154）。
 Chrome が再生していることは CDP で `video.currentTime` が進むのを見て確かめた。
 
 | | プロセス | Private（合計） | Working Set（合計） |
 | --- | --- | --- | --- |
 | Chrome 154 ヘッドレス | 11 | 594 MB | 953 MB |
-| yum-lite | 1 | 12.8 MB | 36.8 MB |
+| ytm-lite | 1 | 12.8 MB | 36.8 MB |
 
 - Chrome の内訳: レンダラー（YouTube Music のページ）203MB、GPU 149MB、ブラウザ 65MB、video 59MB など。
   この曲は Chrome では動画として再生されていた。ヘッドレスは画面まわりが無いので、通常の Chrome はこれより多い。
   Working Set の合計は共有ページを重ねて数えている。
-- yum-lite の状態ごと（Private / Working Set）:
+- ytm-lite の状態ごと（Private / Working Set）:
   何も読まずに起動 3.1MB / 18.5MB、プレイリスト 182 曲を読んだ後 4.2MB / 22.5MB（読み込み中の山は WS 26.6MB）、
   再生中 12.8MB / 36.8MB（取得した音声 3.6MB を含む）、次の曲の先読みを持っている 40 秒間は
   その曲の分だけ増える（10:50 の曲で 23MB）。

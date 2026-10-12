@@ -1,4 +1,4 @@
-# yum-lite のアイコン(src/yum-lite.ico)を作る。Pillow が要る。
+# ytm-lite のアイコン(src/ytm-lite.ico)を作る。Pillow が要る。
 #   python tools/make_icon.py
 # 赤い角丸の四角に白い八分音符。大きく描いてから各サイズへ縮める。
 from PIL import Image, ImageDraw
@@ -24,7 +24,7 @@ def draw():
 def main():
     big = draw()
     sizes = [16, 20, 24, 32, 40, 48, 64, 256]
-    out = os.path.join(os.path.dirname(__file__), "..", "src", "yum-lite.ico")
+    out = os.path.join(os.path.dirname(__file__), "..", "src", "ytm-lite.ico")
     big.save(out, format="ICO", sizes=[(s, s) for s in sizes])
     print("wrote", os.path.normpath(out))
 
