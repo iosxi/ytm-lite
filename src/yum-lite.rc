@@ -1,0 +1,55 @@
+#pragma code_page(65001)
+#include <windows.h>
+#include "resource.h"
+
+IDI_APP ICON "yum-lite.ico"
+1 RT_MANIFEST "yum-lite.manifest"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     1,0,0,0
+PRODUCTVERSION  1,0,0,0
+FILEFLAGSMASK   0x3fL
+FILEFLAGS       0x0L
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        VFT_APP
+FILESUBTYPE     0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "041104b0"
+        BEGIN
+            VALUE "FileDescription",  "yum-lite - YouTube Music のプレイリストを再生するだけの軽いアプリ"
+            VALUE "FileVersion",      "1"
+            VALUE "InternalName",     "yum-lite"
+            VALUE "OriginalFilename", "yum-lite.exe"
+            VALUE "ProductName",      "yum-lite"
+            VALUE "ProductVersion",   "1"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x411, 1200
+    END
+END
+
+IDD_LOGIN DIALOGEX 0, 0, 320, 236
+STYLE DS_MODALFRAME | DS_CENTER | DS_SHELLFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "ログイン情報の設定"
+FONT 9, "Yu Gothic UI", 400, 0, 0x80
+BEGIN
+    LTEXT           "", IDC_AUTH_HELP, 7, 7, 306, 112
+    EDITTEXT        IDC_AUTH_TEXT, 7, 122, 306, 86, ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN | WS_VSCROLL | WS_TABSTOP
+    DEFPUSHBUTTON   "保存", IDOK, 203, 214, 52, 15
+    PUSHBUTTON      "キャンセル", IDCANCEL, 261, 214, 52, 15
+END
+
+IDD_OPENURL DIALOGEX 0, 0, 300, 88
+STYLE DS_MODALFRAME | DS_CENTER | DS_SHELLFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "プレイリストを開く"
+FONT 9, "Yu Gothic UI", 400, 0, 0x80
+BEGIN
+    LTEXT           "", IDC_URL_HELP, 7, 7, 286, 30
+    EDITTEXT        IDC_URL, 7, 42, 286, 14, ES_AUTOHSCROLL | WS_TABSTOP
+    DEFPUSHBUTTON   "開く", IDOK, 183, 66, 52, 15
+    PUSHBUTTON      "キャンセル", IDCANCEL, 241, 66, 52, 15
+END
