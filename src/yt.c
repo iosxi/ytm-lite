@@ -508,8 +508,9 @@ static WCHAR *flex_text(J *r, int col)
     return JText(JPath(c, "musicResponsiveListItemFlexColumnRenderer.text"));
 }
 
-/* 一番大きい画像の URL。正方形のジャケット(lh3 / yt3 の「=w60-h60-…」)は 150x150 に指定し直す
-   (Chrome の YouTube Music が SMTC に渡しているのと同じ大きさ。muutask の DEVELOPMENT.md) */
+/* 一番大きい画像の URL。正方形のジャケット(lh3 / yt3 の「=w60-h60-…」)は thumbnail_size(既定 544)に
+   指定し直す。v7 は Chrome と同じ 150 にしていたが、muutask の拡大表示(標準で 180 DIP、125% で 225px)で
+   引き伸ばされて粗かった(2026-10-13 本人の指摘)。544 は 89KB、1200 は 258KB(実測) */
 static char *thumb_url(J *arr)
 {
     J          *t, *last = NULL;
@@ -522,7 +523,7 @@ static char *thumb_url(J *arr)
     if (eq && eq[1] == 'w' && strstr(eq, "-h")) {
         Buf b = {0};
         BufAdd(&b, u, (size_t)(eq - u));
-        BufAddStr(&b, "=w150-h150-l90-rj");
+        BufAddf(&b, "=w%d-h%d-l90-rj", g_cfg.thumbSize, g_cfg.thumbSize);
         return BufTake(&b);
     }
     return U8Dup(u);

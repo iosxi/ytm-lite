@@ -22,7 +22,7 @@
 #include <wchar.h>
 
 #define APP_NAME     L"ytm-lite"
-#define APP_VERSION  "8"            /* .rc の VERSIONINFO と .manifest も合わせて上げる */
+#define APP_VERSION  "9"            /* .rc の VERSIONINFO と .manifest も合わせて上げる */
 
 /* 画面のスレッドへ届ける通知 */
 #define WM_APP_LIBRARY   (WM_APP + 1)   /* lParam = LibResult*  */
@@ -114,6 +114,7 @@ typedef struct {
     int   theme;                /* 0 = システムに合わせる、1 = ライト、2 = ダーク */
     int   mediakeys;            /* キーボードのメディアキーを横取りする */
     int   thumbnail;            /* ジャケット画像を SMTC に渡す */
+    int   thumbSize;            /* ジャケット画像の一辺(px)。既定 544 */
     int   debug;
     char  lastPlaylist[128];
 } Config;

@@ -304,6 +304,7 @@ int cli_main(int argc, WCHAR **argv)
                 char *ti = W2U(t.v[i].title), *ar = W2U(t.v[i].artist);
                 out_printf("  %s  %d:%02d  %s / %s%s", t.v[i].vid, t.v[i].dur / 60, t.v[i].dur % 60, ti ? ti : "", ar ? ar : "",
                            t.v[i].grey ? " (grey)" : "");
+                if (has_arg(argc, argv, L"-thumbs") && t.v[i].thumb) out_printf("      thumb %s", t.v[i].thumb);
                 free(ti);
                 free(ar);
             }
