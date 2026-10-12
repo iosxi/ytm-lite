@@ -22,7 +22,7 @@
 #include <wchar.h>
 
 #define APP_NAME     L"ytm-lite"
-#define APP_VERSION  "7"            /* .rc の VERSIONINFO と .manifest も合わせて上げる */
+#define APP_VERSION  "8"            /* .rc の VERSIONINFO と .manifest も合わせて上げる */
 
 /* 画面のスレッドへ届ける通知 */
 #define WM_APP_LIBRARY   (WM_APP + 1)   /* lParam = LibResult*  */

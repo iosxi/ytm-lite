@@ -194,6 +194,24 @@ Portable 版（PortableApps.com）のプロファイルは `FirefoxPortable\Data
 `Data\profile` を読めた。自動では、Portable 版が動いていないときはいつものプロファイル、動いているときは Portable 版を選んだ。
 本物の Firefox Portable と［music.youtube.com を開く］は確かめていない。
 
+### 2026-10-13: Firefox Portable が見つからない・読めない（v8）
+
+遠隔の利用者（Windows 11 23H2）から: (1) Portable 版で YouTube Music を開いたまま［Firefox から読み込む］→「ログインしたものがありません」、
+(2) Portable 版のフォルダを指定しても「ログインしていないようです」。本人の PC に Portable 版を 4 つ置いてもらって調べた。
+
+- (1) は本人の PC でも再現した。R: は ImDisk の RAM ディスク（RamDay）で、`QueryFullProcessImageNameW` は
+  フラグ 0 でも `\Device\ImDisk2\…\App\Firefox64\firefox.exe` を返し、`…\App\` の形として見分けられなかった。
+  v8 は起動オプション（`NtQueryInformationProcess` の ProcessCommandLineInformation）の `-profile <フォルダ>` を先に読み
+  （Portable 版は `firefox.exe -profile …\Data\profile` で起動する）、`\Device\…` は `QueryDosDevice` でドライブ名に直す。
+  直した後、自動で R: の Portable 版を候補の先頭にして読めた（22 個）。
+- (2) は本人の PC では再現しない（C: と R: の Portable 版とも、フォルダ指定で 22 個読めた）。遠隔の環境はまだ分からない。
+  思い当たる原因に備えた:
+  - コンテナやサイトごとの分離（first-party isolation）で、YouTube の cookie の `originAttributes` が空でない →
+    空の束にログインが無ければ、ほかの束（埋め込み用 `partitionKey` を除く）も見る。
+  - 期限の単位を版（`user_version` ≥ 16 ならミリ秒）で決め打ちしていた → 値の大きさ（1e11 より大きければミリ秒）で見分ける。
+  - 失敗したときは「YouTube の cookie の数、期限切れ、コンテナ等、埋め込み用、WAL のページ数」を出す。
+    「閉じたときに cookie を削除する」設定の Firefox は、ログインの cookie をファイルに書かないので読めない（そのときは数が少なく出るはず）。
+
 ### 2026-10-13: Windows のメディア コントロール（SMTC）に出す（v6）
 
 本人の要望: windows\muutask に再生中として出し、そこから操作したい。

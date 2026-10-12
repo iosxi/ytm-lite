@@ -276,41 +276,73 @@ static int column_index(const char *sql, const char *col)
     return -1;
 }
 
+/* originAttributes ごとの束。'' はふつうの cookie、'^userContextId=2' はコンテナ、
+   '^firstPartyDomain=youtube.com' はサイトごとの分離、'^partitionKey=…' はほかのサイトに埋め込まれた分 */
+#define MAX_GROUPS 16
+typedef struct {
+    char   origin[192];
+    Buf    out, music;     /* music.youtube.com だけの cookie は先に入れる(同名なら先のものが使われる) */
+    int    count;
+    BOOL   partition;
+} Group;
+
 typedef struct {
     int    cName, cValue, cHost, cExpiry, cOrigin;
-    BOOL   expiryMs;
     LONG64 now;
-    Buf    out;
-    int    count;
-    char   seen[64][64];   /* 同じ名前を 2 度入れない(music.youtube.com を優先) */
-    int    seenN;
-    Buf    music;          /* music.youtube.com だけの cookie(先に入れる) */
+    Group  g[MAX_GROUPS];
+    int    ng;
+    int    rows, expired;  /* 診断用: YouTube の行の数、期限切れで捨てた数 */
 } Collect;
+
+static Group *group_for(Collect *c, const char *o, DWORD n)
+{
+    int i;
+    for (i = 0; i < c->ng; i++)
+        if (strlen(c->g[i].origin) == n && !memcmp(c->g[i].origin, o, n)) return &c->g[i];
+    if (c->ng >= MAX_GROUPS || n >= sizeof(c->g[0].origin)) return NULL;
+    memcpy(c->g[c->ng].origin, o, n);
+    c->g[c->ng].origin[n] = 0;
+    c->g[c->ng].partition = strstr(c->g[c->ng].origin, "partitionKey=") != NULL;
+    return &c->g[c->ng++];
+}
 
 static void cookie_row(void *ctx, const BYTE *rec, DWORD len)
 {
     Collect *c = (Collect *)ctx;
     Val name, value, host, expiry, origin;
     BOOL music;
+    Group *g;
     Buf *dst;
     if (!record_col(rec, len, c->cName, &name) || !record_col(rec, len, c->cValue, &value) ||
         !record_col(rec, len, c->cHost, &host) || !record_col(rec, len, c->cExpiry, &expiry) ||
         !record_col(rec, len, c->cOrigin, &origin)) return;
     if (host.kind != 3 || name.kind != 3 || value.kind != 3 || !name.n) return;
-    if (origin.kind == 3 && origin.n) return;                       /* コンテナ・埋め込み */
     music = host.n == 17 && !memcmp(host.s, "music.youtube.com", 17);
     if (!music && !(host.n == 12 && !memcmp(host.s, ".youtube.com", 12)) &&
         !(host.n == 11 && !memcmp(host.s, "youtube.com", 11))) return;
+    c->rows++;
     if (expiry.kind == 1) {
-        LONG64 e = c->expiryMs ? expiry.i / 1000 : expiry.i;
-        if (e && e < c->now) return;                                 /* 期限切れ */
+        /* 期限の単位は値の大きさで見分ける(版 16 からミリ秒だが、版で決め打ちすると
+           秒のまま残った行を全部「期限切れ」にしてしまうので)。1e11 秒は西暦 5000 年より先 */
+        LONG64 e = expiry.i > 100000000000LL ? expiry.i / 1000 : expiry.i;
+        if (e && e < c->now) { c->expired++; return; }
     }
-    dst = music ? &c->music : &c->out;
+    g = group_for(c, origin.kind == 3 ? origin.s : "", origin.kind == 3 ? origin.n : 0);
+    if (!g) return;
+    dst = music ? &g->music : &g->out;
     if (dst->n) BufAddStr(dst, "; ");
     BufAdd(dst, name.s, name.n);
     BufAddChar(dst, '=');
     BufAdd(dst, value.s, value.n);
-    c->count++;
+    g->count++;
+}
+
+static char *group_cookie(Group *g)
+{
+    Buf all = {0};
+    if (g->music.n) BufAddStr(&all, g->music.p);
+    if (g->out.n) { if (all.n) BufAddStr(&all, "; "); BufAddStr(&all, g->out.p); }
+    return all.p;
 }
 
 /* 1 つのプロファイルのフォルダから読む。成功したら "a=1; b=2" */
@@ -353,27 +385,40 @@ char *ff_read_youtube_cookies(const WCHAR *profileDir, int *count, char *err, si
         _snprintf(err, errlen, "Firefox の cookie の表の形が想定と違う");
         goto done;
     }
-    c.expiryMs = userVersion >= 16;          /* Firefox 142(版 16)から期限がミリ秒(yt-dlp と同じ判定) */
+    (void)userVersion;
     c.now = unix_time();
     walk_table(&q, sch.root, 0, cookie_row, &c);
-    /* music.youtube.com だけのものを先に、.youtube.com のものを後に(同名なら先のものが使われる) */
-    if (c.music.n) {
-        Buf all = {0};
-        BufAddStr(&all, c.music.p);
-        if (c.out.n) { BufAddStr(&all, "; "); BufAddStr(&all, c.out.p); }
-        BufFree(&c.out);
-        c.out = all;
+    /* ふつうの cookie でログインしていればそれ。無ければコンテナやサイトごとの分離の束
+       (Firefox の設定で YouTube の cookie がそちらに入る)。埋め込み用の束は使わない */
+    {
+        int pass, i;
+        for (pass = 0; pass < 2 && !res; pass++)
+            for (i = 0; i < c.ng && !res; i++) {
+                char *ck;
+                if (c.g[i].partition || (pass == 0) != (c.g[i].origin[0] == 0)) continue;
+                ck = group_cookie(&c.g[i]);
+                if (ck && yt_cookie_ok(ck)) { res = ck; *count = c.g[i].count; log_printf("firefox cookies: group '%s'", c.g[i].origin); }
+                else if (ck) { SecureZeroMemory(ck, strlen(ck)); free(ck); }
+            }
     }
-    *count = c.count;
-    if (!c.out.p || !yt_cookie_ok(c.out.p)) {
-        _snprintf(err, errlen, "Firefox で YouTube にログインしていないようです(SAPISID が無い)");
+    if (!res) {
+        /* 遠くの PC からの報告でも原因が分かるよう、数を添える */
+        int frames = 0, i, others = 0, parts = 0;
+        for (i = 0; i < (int)q.walPgN; i++) if (q.walPg[i]) frames++;
+        for (i = 0; i < c.ng; i++) { if (c.g[i].partition) parts += c.g[i].count; else if (c.g[i].origin[0]) others += c.g[i].count; }
+        _snprintf(err, errlen, "Firefox で YouTube にログインしていないようです(SAPISID が無い。YouTube の cookie %d 個、"
+                  "期限切れ %d、コンテナ等 %d、埋め込み用 %d、WAL %d ページ)", c.rows, c.expired, others, parts, frames);
         goto done;
     }
-    res = BufTake(&c.out);
 
 done:
-    if (c.out.p) { SecureZeroMemory(c.out.p, c.out.n); BufFree(&c.out); }
-    if (c.music.p) { SecureZeroMemory(c.music.p, c.music.n); BufFree(&c.music); }
+    {
+        int i;
+        for (i = 0; i < c.ng; i++) {
+            if (c.g[i].out.p) { SecureZeroMemory(c.g[i].out.p, c.g[i].out.n); BufFree(&c.g[i].out); }
+            if (c.g[i].music.p) { SecureZeroMemory(c.g[i].music.p, c.g[i].music.n); BufFree(&c.g[i].music); }
+        }
+    }
     if (q.db) { SecureZeroMemory(q.db, q.dbLen); free(q.db); }
     if (q.wal) { SecureZeroMemory(q.wal, q.walLen); free(q.wal); }
     free(q.walPg);
@@ -464,6 +509,65 @@ BOOL ff_launcher_for_profile(const WCHAR *profile, WCHAR *exe, size_t cap)
     return TRUE;
 }
 
+/* 「\Device\ImDisk2\…」のような NT の名前を「R:\…」に直す。
+   2026-10-13: RAM ディスク(ImDisk)の上の firefox.exe は、QueryFullProcessImageNameW(0)でも
+   この形で返ってきて、Portable 版だと見分けられなかった */
+static void device_to_dos(WCHAR *path, size_t cap)
+{
+    WCHAR drive[3] = L"A:", target[MAX_PATH], t[MAX_PATH];
+    if (wcsncmp(path, L"\\Device\\", 8)) return;
+    for (; drive[0] <= L'Z'; drive[0]++) {
+        size_t n;
+        if (!QueryDosDeviceW(drive, target, MAX_PATH)) continue;
+        n = wcslen(target);
+        if (!_wcsnicmp(path, target, n) && path[n] == L'\\') {
+            _snwprintf(t, MAX_PATH, L"%s%s", drive, path + n);
+            t[MAX_PATH - 1] = 0;
+            wcsncpy_s(path, cap, t, _TRUNCATE);
+            return;
+        }
+    }
+}
+
+/* 動いている Firefox の起動オプションの「-profile <フォルダ>」(Portable 版はこれで起動する) */
+typedef LONG (NTAPI *fnNtQIP)(HANDLE, ULONG, PVOID, ULONG, PULONG);
+typedef struct { USHORT Length, MaximumLength; PWSTR Buffer; } USTR;
+
+static BOOL profile_from_cmdline(HANDLE h, WCHAR *out, size_t cap)
+{
+    static fnNtQIP nqip;
+    BYTE  *buf;
+    ULONG  len = 0;
+    WCHAR *cmd, *p;
+    BOOL   ok = FALSE;
+    if (!nqip) nqip = (fnNtQIP)(void *)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryInformationProcess");
+    if (!nqip) return FALSE;
+    buf = (BYTE *)malloc(65536);
+    if (!buf) return FALSE;
+    /* 60 = ProcessCommandLineInformation(Windows 8.1 から。PROCESS_QUERY_LIMITED_INFORMATION で読める) */
+    if (nqip(h, 60, buf, 65536 - sizeof(WCHAR), &len) == 0) {
+        USTR *us = (USTR *)buf;
+        cmd = (WCHAR *)calloc(us->Length / sizeof(WCHAR) + 1, sizeof(WCHAR));
+        if (cmd) {
+            memcpy(cmd, us->Buffer, us->Length);
+            for (p = cmd; (p = wcsstr(p, L"-profile")) != NULL; p += 8) {
+                WCHAR *s = p + 8, *e;
+                if (p > cmd && p[-1] != L' ' && p[-1] != L'-') continue;
+                if (*s != L' ' && *s != L'\t') continue;
+                while (*s == L' ' || *s == L'\t') s++;
+                if (*s == L'"') { s++; e = wcschr(s, L'"'); }
+                else e = wcschr(s, L' ');
+                if (e) *e = 0;
+                if (*s) { wcsncpy_s(out, cap, s, _TRUNCATE); ok = TRUE; }
+                break;
+            }
+            free(cmd);
+        }
+    }
+    free(buf);
+    return ok;
+}
+
 static void add_candidate(WCHAR (*list)[MAX_PATH], int *n, int max, const WCHAR *dir)
 {
     int i;
@@ -489,10 +593,18 @@ int ff_candidates(WCHAR (*list)[MAX_PATH], int max)
             if (!_wcsicmp(pe.szExeFile, L"firefox.exe")) {
                 HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pe.th32ProcessID);
                 if (h) {
-                    WCHAR exe[MAX_PATH];
+                    WCHAR exe[MAX_PATH], arg[MAX_PATH];
                     DWORD len = MAX_PATH;
-                    if (QueryFullProcessImageNameW(h, 0, exe, &len) && ff_resolve_profile(exe, p, MAX_PATH))
-                        add_candidate(list, &n, max, p);
+                    /* 1. 起動オプションの -profile(いちばん確か) */
+                    if (profile_from_cmdline(h, arg, MAX_PATH)) {
+                        device_to_dos(arg, MAX_PATH);
+                        if (ff_resolve_profile(arg, p, MAX_PATH)) add_candidate(list, &n, max, p);
+                    }
+                    /* 2. exe の場所(…\App\Firefox…\firefox.exe なら Portable 版) */
+                    if (QueryFullProcessImageNameW(h, 0, exe, &len)) {
+                        device_to_dos(exe, MAX_PATH);
+                        if (ff_resolve_profile(exe, p, MAX_PATH)) add_candidate(list, &n, max, p);
+                    }
                     CloseHandle(h);
                 }
             }
