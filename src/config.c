@@ -139,6 +139,16 @@ void cfg_load(void)
     get_str(L"cooldown_until", tmp, sizeof(tmp));
     g_cfg.cooldownUntil = _atoi64(tmp);
 
+    get_str(L"cookie_source", tmp, sizeof(tmp));
+    if (!strcmp(tmp, "firefox")) {
+        /* Firefox から読む: ini には cookie を置かず、起動のたびに読み直す
+           (Firefox が cookie を入れ替えても、取り直しが要らない) */
+        g_cfg.cookieSource = COOKIE_FIREFOX;
+        GetPrivateProfileStringW(SEC, L"firefox_profile", L"", g_cfg.ffProfile, MAX_PATH, g_cfg.ini);
+        cfg_reload_cookie(g_cfg.cookieErr, sizeof(g_cfg.cookieErr));
+        return;
+    }
+
     /* cookie の暗号文は長い(数 KB の 2 倍)ので大きな器で読む */
     big = (WCHAR *)malloc(sizeof(WCHAR) * 65536);
     if (big) {
@@ -146,6 +156,7 @@ void cfg_load(void)
         if (big[0]) {
             char *hex = W2U(big);
             if (hex) { g_cfg.cookie = unprotect(hex); free(hex); }
+            if (g_cfg.cookie) g_cfg.cookieSource = COOKIE_PASTED;
         }
         free(big);
     }
@@ -170,28 +181,82 @@ void cfg_save(void)
    次に入れ替えるときに解放する(そのころには使い終わっている) */
 static char *g_retiredCookie;
 
-void cfg_set_cookie(const char *cookie)
+/* メモリの cookie を入れ替える(newCookie は引き取る) */
+static void swap_cookie(char *newCookie)
 {
     if (g_retiredCookie) {
         SecureZeroMemory(g_retiredCookie, strlen(g_retiredCookie));
         free(g_retiredCookie);
     }
     g_retiredCookie = g_cfg.cookie;
-    g_cfg.cookie = NULL;
+    g_cfg.cookie = newCookie;
+}
+
+void cfg_set_cookie(const char *cookie)
+{
+    swap_cookie(cookie && *cookie ? U8Dup(cookie) : NULL);
+    put_str(L"cookie_source", NULL);
+    put_str(L"firefox_profile", NULL);
+    g_cfg.ffProfile[0] = 0;
     if (cookie && *cookie) {
         char *hex = protect(cookie);
-        g_cfg.cookie = U8Dup(cookie);
+        g_cfg.cookieSource = COOKIE_PASTED;
         put_str(L"cookie", hex);
         free(hex);
         put_str(L"authuser", g_cfg.authuser);
         put_str(L"ua", g_cfg.ua);
     } else {
+        g_cfg.cookieSource = COOKIE_NONE;
         put_str(L"cookie", NULL);
         put_str(L"authuser", NULL);
         put_str(L"ua", NULL);
         g_cfg.authuser[0] = 0;
         g_cfg.ua[0] = 0;
     }
+}
+
+BOOL cfg_reload_cookie(char *err, size_t errlen)
+{
+    WCHAR prof[MAX_PATH];
+    char *ck;
+    int   n = 0;
+    if (g_cfg.cookieSource != COOKIE_FIREFOX) { _snprintf(err, errlen, "Firefox から読む設定ではない"); return FALSE; }
+    wcscpy_s(prof, MAX_PATH, g_cfg.ffProfile);
+    if (!prof[0] || GetFileAttributesW(prof) == INVALID_FILE_ATTRIBUTES) {
+        if (!ff_find_profile(prof, MAX_PATH)) { _snprintf(err, errlen, "Firefox のプロファイルが見つからない"); return FALSE; }
+    }
+    ck = ff_read_youtube_cookies(prof, &n, err, errlen);
+    if (!ck) return FALSE;
+    ff_user_agent(prof, g_cfg.ua, sizeof(g_cfg.ua));
+    strcpy_s(g_cfg.authuser, sizeof(g_cfg.authuser), "0");
+    swap_cookie(ck);
+    log_printf("cookies from Firefox: %d", n);
+    return TRUE;
+}
+
+BOOL cfg_use_firefox(const WCHAR *profile, char *err, size_t errlen)
+{
+    WCHAR prof[MAX_PATH];
+    char *ck, *p;
+    int   n = 0;
+    if (profile && *profile) wcscpy_s(prof, MAX_PATH, profile);
+    else if (!ff_find_profile(prof, MAX_PATH)) { _snprintf(err, errlen, "Firefox のプロファイルが見つかりませんでした"); return FALSE; }
+    ck = ff_read_youtube_cookies(prof, &n, err, errlen);
+    if (!ck) return FALSE;
+    swap_cookie(ck);
+    g_cfg.cookieSource = COOKIE_FIREFOX;
+    wcscpy_s(g_cfg.ffProfile, MAX_PATH, prof);
+    ff_user_agent(prof, g_cfg.ua, sizeof(g_cfg.ua));
+    strcpy_s(g_cfg.authuser, sizeof(g_cfg.authuser), "0");
+    /* ini には「Firefox から読む」ことと場所だけ。cookie は書かない(前に貼ったものは消す) */
+    put_str(L"cookie", NULL);
+    put_str(L"authuser", NULL);
+    put_str(L"ua", NULL);
+    put_str(L"cookie_source", "firefox");
+    p = W2U(prof);
+    put_str(L"firefox_profile", p);
+    free(p);
+    return TRUE;
 }
 
 void cfg_save_guest(void)

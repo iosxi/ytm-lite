@@ -17,8 +17,9 @@
  *     visitorData は端末ごとに 1 つ持ち続ける(実機と同じ)。
  *
  *  3. 回数を抑える。player は曲ごとに 1 回(と、次の曲の先読み 1 回)。間隔は最低 2 秒、
- *     10 分間に 20 回まで。yt-dlp の Wiki によれば匿名の上限は 1 時間に約 1000 回の
- *     webpage/player 要求なので、その 1/8 以下。並列には送らない(worker.c が 1 本で回す)。
+ *     5 分間に 15 回まで。yt-dlp の Wiki によれば匿名の上限は 1 時間に約 1000 回の
+ *     webpage/player 要求なので、その 1/5 以下。並列には送らない(worker.c が 1 本で回す)。
+ *     「次へ」の連打は ui.c がまとめ、止まった曲の分だけ送る。
  *
  *  4. 拒まれたら引く。429、または「ボットでないことを確認」が返ったら、30 分
  *     (Retry-After があればそれ)何も送らない。ini に書くので、起動し直しても続く。
@@ -42,8 +43,11 @@
 
 #define CHUNK          (10 * 1024 * 1024)      /* yt-dlp と同じ。GVS はこれを超える range を嫌う */
 #define MIN_GAP_MS     2000
-#define WINDOW_MS      (10 * 60 * 1000)
-#define WINDOW_MAX     20
+/* v4 まで 10 分に 20 回。待ちが最長 10 分と長いので、本人の要望で 5 分に 15 回にした(2026-10-12)。
+   1 時間あたり最大 180 回で、yt-dlp の Wiki の匿名の上限(約 1000 回)の 1/5 以下。
+   実測: ゲストのセッションで約 2.5 秒おきに 10 回続けて送ったまとまりが 2 回あっても拒まれなかった。 */
+#define WINDOW_MS      (5 * 60 * 1000)
+#define WINDOW_MAX     15
 #define COOLDOWN_SEC   (30 * 60)
 #define MAX_PAGES      100
 
@@ -389,8 +393,8 @@ static int logged_in_flag(J *root)
     return -1;
 }
 
-static JDoc *music_post(const char *endpoint, const char *query, const char *bodyTail, BOOL account,
-                        char *err, size_t errlen)
+static JDoc *music_post_once(const char *endpoint, const char *query, const char *bodyTail, BOOL account,
+                             BOOL *authFail, char *err, size_t errlen)
 {
     Buf      url = {0}, h = {0}, body = {0};
     char     ver[32], hl[4], gl[4];
@@ -399,6 +403,12 @@ static JDoc *music_post(const char *endpoint, const char *query, const char *bod
     /* アカウントはアカウントの visitor、匿名はゲストのセッション(再生側と同じ端末として) */
     const char *visitor = account ? g_musicVisitor : g_cfg.visitor;
 
+    *authFail = FALSE;
+    if (account && !g_cfg.cookie) {
+        _snprintf(err, errlen, "%s", g_cfg.cookieErr[0] ? g_cfg.cookieErr : "ログイン情報が設定されていない");
+        *authFail = TRUE;
+        return NULL;
+    }
     if (!account && g_cfg.cooldownUntil > unix_time()) {
         _snprintf(err, errlen, "YouTube に拒まれたため、あと %lld 分は匿名の要求を止めています",
                   (g_cfg.cooldownUntil - unix_time() + 59) / 60);
@@ -436,6 +446,7 @@ static JDoc *music_post(const char *endpoint, const char *query, const char *bod
     if (HttpPost(url.p, h.p, body.p, &r, err, errlen)) {
         if (r.status == 401 || r.status == 403) {
             _snprintf(err, errlen, account ? "ログイン情報が受け付けられなかった(HTTP %d)。設定し直してください" : "拒否された(HTTP %d)", r.status);
+            *authFail = account;
         } else if (r.status == 429) {
             _snprintf(err, errlen, "要求が多すぎると言われた(HTTP 429)。しばらく時間をおいてください");
         } else if (r.status != 200) {
@@ -455,6 +466,30 @@ static JDoc *music_post(const char *endpoint, const char *query, const char *bod
     BufFree(&body);
     return doc;
 }
+
+/* Firefox から読んでいる cookie が拒まれたら(Firefox 側で入れ替わった)、読み直して 1 回だけやり直す */
+static BOOL reload_account(void)
+{
+    char e[256];
+    if (g_cfg.cookieSource != COOKIE_FIREFOX || !cfg_reload_cookie(e, sizeof(e))) return FALSE;
+    g_userSession[0] = 0;
+    g_musicVisitor[0] = 0;
+    log_printf("account cookies reloaded from Firefox");
+    return TRUE;
+}
+
+static JDoc *music_post(const char *endpoint, const char *query, const char *bodyTail, BOOL account,
+                        char *err, size_t errlen)
+{
+    BOOL  authFail = FALSE;
+    JDoc *d = music_post_once(endpoint, query, bodyTail, account, &authFail, err, errlen);
+    if (!d && authFail && reload_account()) d = music_post_once(endpoint, query, bodyTail, account, &authFail, err, errlen);
+    return d;
+}
+
+static void (*g_progressHook)(const char *id, int count);
+
+void yt_set_progress_hook(void (*fn)(const char *id, int count)) { g_progressHook = fn; }
 
 static int parse_duration(const WCHAR *s)
 {
@@ -592,6 +627,7 @@ int yt_playlist(const char *id, TrackList *out, BOOL useAccount, WCHAR **title, 
         free(tok);
         tok = next;
         if (!ok || !tok || out->n == before) break;
+        if (g_progressHook) g_progressHook(id, out->n);     /* 続きがあるときだけ(読み終わりは結果で知らせる) */
     }
     free(tok);
     BufFree(&q);
@@ -625,12 +661,16 @@ int yt_library(PlaylistList *out, char *err, size_t errlen)
 {
     Buf   q = {0}, tail = {0};
     char *tok = NULL;
-    BOOL  oldStyle = FALSE;
+    BOOL  oldStyle = FALSE, retried = FALSE;
     int   page, ok = 1;
 
     memset(out, 0, sizeof(*out));
     err[0] = 0;
-    if (!g_cfg.cookie) { _snprintf(err, errlen, "ログイン情報が設定されていない"); return 0; }
+    if (!g_cfg.cookie && !reload_account()) {
+        _snprintf(err, errlen, "%s", g_cfg.cookieErr[0] ? g_cfg.cookieErr : "ログイン情報が設定されていない");
+        err[errlen - 1] = 0;
+        return 0;
+    }
     for (page = 0; page < 20; page++) {
         JDoc *doc;
         J    *root, *cont = NULL, *items = NULL, *it;
@@ -643,8 +683,11 @@ int yt_library(PlaylistList *out, char *err, size_t errlen)
         if (!doc) { ok = 0; break; }
         root = JsonRoot(doc);
         if (page == 0 && logged_in_flag(root) == 0) {
-            _snprintf(err, errlen, "ログインできていない(cookie が無効か期限切れ)。ログイン情報を設定し直してください");
             JsonFree(doc);
+            if (!retried && reload_account()) { retried = TRUE; page = -1; continue; }   /* Firefox から読み直して 1 回だけ */
+            _snprintf(err, errlen, g_cfg.cookieSource == COOKIE_FIREFOX
+                      ? "ログインできていない。Firefox で music.youtube.com にログインしているか確かめてください"
+                      : "ログインできていない(cookie が無効か期限切れ)。ログイン情報を設定し直してください");
             ok = 0;
             break;
         }

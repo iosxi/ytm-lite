@@ -14,6 +14,7 @@
  *  ytm-lite.exe -playlist <ID か URL> [-account]   プレイリストを読む(既定は匿名)
  *  ytm-lite.exe -library                    ライブラリのプレイリスト一覧(要ログイン情報)
  *  ytm-lite.exe -setauth <file>             ファイルの中身(要求ヘッダーなど)をログイン情報にする
+ *  ytm-lite.exe -ffcookies [<profile>]      Firefox から YouTube の cookie を読めるか(名前と数だけ出す)
  *
  *  通信する入口は、いずれも yt.c の作法(間隔・回数・拒まれたら止める)の内側で動く。
  * ================================================================== */
@@ -137,7 +138,7 @@ int cli_main(int argc, WCHAR **argv)
         return 1;
     }
     if (!has_arg(argc, argv, L"-probe") && !has_arg(argc, argv, L"-playlist") && !has_arg(argc, argv, L"-playtest") &&
-        !has_arg(argc, argv, L"-library") && !has_arg(argc, argv, L"-setauth"))
+        !has_arg(argc, argv, L"-library") && !has_arg(argc, argv, L"-setauth") && !has_arg(argc, argv, L"-ffcookies"))
         return 0;
 
     cfg_init_path(arg_after(argc, argv, L"-ini"));
@@ -192,6 +193,47 @@ int cli_main(int argc, WCHAR **argv)
             if (ad.h) GlobalFree(ad.h);
         }
         free(vid);
+        return 1;
+    }
+
+    if (has_arg(argc, argv, L"-ffcookies")) {
+        /* Firefox から読めるか(cookie の名前と数だけを出す。値は出さない) */
+        WCHAR prof[MAX_PATH];
+        const WCHAR *given = arg_after(argc, argv, L"-ffcookies");
+        char *ck, *u;
+        int   n = 0;
+        if (given && given[0] != L'-') wcscpy_s(prof, MAX_PATH, given);
+        else if (!ff_find_profile(prof, MAX_PATH)) { out_printf("no firefox profile"); return 1; }
+        u = W2U(prof);
+        out_printf("profile=%s", u ? u : "");
+        free(u);
+        ck = ff_read_youtube_cookies(prof, &n, err, sizeof(err));
+        if (!ck) { out_printf("error: %s", err); return 1; }
+        {
+            char  *copy = U8Dup(ck), *p, *ctx = NULL;
+            Buf    names = {0};
+            char   ua[256];
+            for (p = strtok_s(copy, ";", &ctx); p; p = strtok_s(NULL, ";", &ctx)) {
+                size_t k;
+                while (*p == ' ') p++;
+                k = strcspn(p, "=");
+                if (names.n) BufAddChar(&names, ' ');
+                BufAdd(&names, p, k);
+            }
+            out_printf("cookies=%d names=%s", n, names.p ? names.p : "");
+            {
+                char h[41];
+                Sha1Hex(ck, h);
+                out_printf("sha1=%s", h);           /* 検証用(値の代わりに突き合わせる) */
+            }
+            ff_user_agent(prof, ua, sizeof(ua));
+            out_printf("ua=%s", ua);
+            BufFree(&names);
+            SecureZeroMemory(copy, strlen(copy));
+            free(copy);
+        }
+        SecureZeroMemory(ck, strlen(ck));
+        free(ck);
         return 1;
     }
 

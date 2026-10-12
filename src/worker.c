@@ -138,10 +138,18 @@ static void on_wait(int sec)
     if (show && g_notify) PostMessageW(g_notify, WM_APP_WAIT, (WPARAM)sec, 0);
 }
 
+static void on_progress(const char *id, int count)
+{
+    char *p = U8Dup(id);
+    if (!p) return;
+    if (!g_notify || !PostMessageW(g_notify, WM_APP_PROGRESS, (WPARAM)count, (LPARAM)p)) free(p);
+}
+
 void worker_start(HWND notify)
 {
     g_notify = notify;
     yt_set_wait_hook(on_wait);
+    yt_set_progress_hook(on_progress);
     InitializeCriticalSection(&g_cs);
     g_ev = CreateEventW(NULL, FALSE, FALSE, NULL);
     g_thread = CreateThread(NULL, 0, worker_thread, NULL, 0, NULL);

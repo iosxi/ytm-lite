@@ -46,6 +46,8 @@
 
 #define TIMER_TICK   1
 #define TIMER_SKIP   2
+#define TIMER_FETCH  3
+#define FETCH_DELAY_MS 400
 
 #define BAR_H        88            /* 下の帯の高さ(DIP) */
 #define PREFETCH_MS  40000
@@ -67,6 +69,8 @@ typedef struct {
     BOOL   account;        /* ライブラリから来たもの(アカウントで読む) */
     TL    *tl;
     BOOL   loading;
+    int    progress;       /* 読み込み中: ここまで読んだ曲数 */
+    WCHAR *loadErr;        /* 読めなかった理由(一覧の中に出す) */
 } Entry;
 
 static HWND   g_wnd, g_pls, g_tracks, g_seek, g_vol, g_btn[6];
@@ -91,6 +95,8 @@ static char   g_playWhenLoaded[128];
 
 static WCHAR  g_status[512];
 static BOOL   g_statusErr;
+static LONG64 g_waitUntil;          /* 上限で待っている: 読み込みを始める時刻(now_ms) */
+static WCHAR  g_libErr[300];        /* ライブラリを読めなかった理由(一覧の中に出す) */
 static BOOL   g_dragging;
 static int    g_lastState = -1;
 static BOOL   g_timer;
@@ -220,7 +226,84 @@ static void free_entry(Entry *e)
     free(e->id);
     free(e->title);
     free(e->sub);
+    free(e->loadErr);
     tl_release(e->tl);
+}
+
+/* 「nekokohako • 777 トラック」から 777 を取る(無ければ 0) */
+static int total_from_sub(const WCHAR *sub)
+{
+    const WCHAR *p;
+    int n = 0;
+    if (!sub) return 0;
+    for (p = sub; *p; p++) {
+        if (*p >= L'0' && *p <= L'9') {
+            n = 0;
+            while ((*p >= L'0' && *p <= L'9') || *p == L',') { if (*p != L',') n = n * 10 + (*p - L'0'); p++; }
+            while (*p == L' ') p++;
+            if (*p == L'ト' || *p == L'曲' || *p == L't') return n;
+            if (!*p) break;
+        }
+    }
+    return 0;
+}
+
+/* 曲の一覧が空のときに、その代わりに出す文(読み込み中、失敗、案内) */
+static BOOL tracks_overlay(WCHAR *buf, size_t cap, BOOL *err)
+{
+    *err = FALSE;
+    if (g_viewTL && g_viewTL->t.n) return FALSE;
+    if (g_view < 0 || g_view >= g_entN) {
+        if (g_entN) wcscpy_s(buf, cap, L"左のプレイリストを選んでください");
+        else if (g_libErr[0]) { _snwprintf(buf, cap, L"ライブラリを読めませんでした\r\n%s", g_libErr); buf[cap - 1] = 0; *err = TRUE; }
+        else if (g_cfg.cookie) wcscpy_s(buf, cap, L"ライブラリを読み込み中…");
+        else wcscpy_s(buf, cap, L"右下の … →「ログイン情報を設定…」で Firefox から読み込むと、\r\n自分のプレイリストがここに出ます");
+        return TRUE;
+    }
+    {
+        Entry *e = &g_ent[g_view];
+        if (e->loading) {
+            int total = total_from_sub(e->sub);
+            if (e->progress && total) _snwprintf(buf, cap, L"「%s」を読み込み中…\r\n%d / %d 曲", e->title, e->progress, total);
+            else if (e->progress) _snwprintf(buf, cap, L"「%s」を読み込み中…\r\n%d 曲", e->title, e->progress);
+            else _snwprintf(buf, cap, L"「%s」を読み込み中…", e->title);
+        } else if (e->loadErr) {
+            _snwprintf(buf, cap, L"読み込めませんでした\r\n%s", e->loadErr);
+            *err = TRUE;
+        } else if (e->tl) {
+            wcscpy_s(buf, cap, L"このプレイリストには曲がありません");
+        } else {
+            return FALSE;
+        }
+        buf[cap - 1] = 0;
+    }
+    return TRUE;
+}
+
+static LRESULT CALLBACK tracks_subclass(HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR ref)
+{
+    LRESULT r = DefSubclassProc(h, msg, wp, lp);
+    (void)id; (void)ref;
+    if (msg == WM_PAINT) {
+        WCHAR text[512];
+        BOOL  err;
+        if (tracks_overlay(text, ARRAYSIZE(text), &err)) {
+            RECT  rc, hd;
+            HDC   dc = GetDC(h);
+            HFONT of = (HFONT)SelectObject(dc, g_font);
+            HWND  header = ListView_GetHeader(h);
+            GetClientRect(h, &rc);
+            if (header && GetWindowRect(header, &hd)) rc.top += hd.bottom - hd.top;
+            rc.top += S(48);
+            InflateRect(&rc, -S(16), 0);
+            SetBkMode(dc, TRANSPARENT);
+            SetTextColor(dc, err ? theme_accent() : theme_dim_text());
+            DrawTextW(dc, text, -1, &rc, DT_CENTER | DT_TOP | DT_WORDBREAK | DT_NOPREFIX);
+            SelectObject(dc, of);
+            ReleaseDC(h, dc);
+        }
+    }
+    return r;
 }
 
 static void show_view(int i)
@@ -242,8 +325,11 @@ static void load_entry(int i)
     Entry *e = &g_ent[i];
     if (e->loading) return;
     e->loading = TRUE;
+    e->progress = 0;
+    free(e->loadErr);
+    e->loadErr = NULL;
     worker_playlist(e->id, e->account || g_cfg.cookie != NULL);
-    set_status(L"プレイリストを読み込み中…", FALSE);
+    InvalidateRect(g_tracks, NULL, TRUE);       /* 一覧の中に「読み込み中…」を出す */
 }
 
 static void select_entry(int i)
@@ -304,6 +390,10 @@ static void stop_playback(const WCHAR *msg, BOOL err)
     player_stop();
     clear_prefetch();
     KillTimer(g_wnd, TIMER_SKIP);
+    KillTimer(g_wnd, TIMER_FETCH);
+    g_waitUntil = 0;
+    SendMessageW(g_seek, SLM_SETPOS, 0, 0);
+    SendMessageW(g_seek, SLM_SETACTIVE, FALSE, 0);
     if (msg) set_status(msg, err);
     InvalidateRect(g_tracks, NULL, FALSE);
 }
@@ -314,16 +404,24 @@ static void start_track(BOOL user)
     if (!t) return;
     g_gen++;
     KillTimer(g_wnd, TIMER_SKIP);
+    KillTimer(g_wnd, TIMER_FETCH);
     update_title();
     if (g_prefVid[0] && !strcmp(g_prefVid, t->vid) && g_pref.h) {
         player_open(&g_pref, g_gen);          /* 先読み済み: すぐ鳴らす */
         g_prefVid[0] = 0;
         g_loadingAudio = FALSE;
     } else {
-        if (user) player_stop();
-        worker_audio(t->vid, g_gen, FALSE);
         g_loadingAudio = TRUE;
-        set_status(L"読み込み中…", FALSE);
+        set_status(L"曲を読み込み中…", FALSE);
+        if (user) {
+            /* 利用者の操作(次へ・前へ・曲を選ぶ)は 0.4 秒待ってから取りに行く。
+               連打したときは最後に止まった曲だけを取る(押した分だけ回数を使わない) */
+            player_stop();
+            worker_cancel_audio();                  /* 前の曲の取得は捨てる */
+            SetTimer(g_wnd, TIMER_FETCH, FETCH_DELAY_MS, NULL);
+        } else {
+            worker_audio(t->vid, g_gen, FALSE);
+        }
     }
     clear_prefetch();
     ensure_timer(TRUE);
@@ -551,7 +649,7 @@ static void paint(HDC hdc)
     player_status(&st, &pos, &dur, &gen);
     if (tr && tr->dur && !dur) dur = tr->dur * 1000;
     if (st == PS_IDLE && !g_loadingAudio) pos = 0;
-    if (g_dragging) pos = (int)SendMessageW(g_seek, TBM_GETPOS, 0, 0) * 1000;
+    if (g_dragging) pos = (int)SendMessageW(g_seek, SLM_GETPOS, 0, 0) * 1000;
     oldFont = (HFONT)SelectObject(mem, g_font);
     SetTextColor(mem, theme_dim_text());
     fmt_time(t, ARRAYSIZE(t), tr ? pos : 0);
@@ -631,98 +729,53 @@ static void draw_button(DRAWITEMSTRUCT *di)
     SelectObject(dc, old);
 }
 
-/* つまみの付いた横棒(シークと音量)。テーマの絵はダークに合わないので自前で描く */
-static LRESULT draw_trackbar(NMCUSTOMDRAW *cd)
-{
-    HWND tb = cd->hdr.hwndFrom;
-    if (cd->dwDrawStage == CDDS_PREPAINT) return CDRF_NOTIFYITEMDRAW;
-    if (cd->dwDrawStage != CDDS_ITEMPREPAINT) return CDRF_DODEFAULT;
-    if (cd->dwItemSpec == TBCD_TICS) return CDRF_SKIPDEFAULT;
-    if (cd->dwItemSpec == TBCD_CHANNEL) {
-        RECT ch = cd->rc, th, full, done;
-        int  cy = (ch.top + ch.bottom) / 2, hh = S(2);
-        HBRUSH b1, b2;
-        SendMessageW(tb, TBM_GETTHUMBRECT, 0, (LPARAM)&th);
-        GetClientRect(tb, &full);
-        FillRect(cd->hdc, &full, theme_footer_brush());
-        SetRect(&full, ch.left, cy - hh, ch.right, cy + hh);
-        b1 = CreateSolidBrush(theme_line());
-        FillRect(cd->hdc, &full, b1);
-        done = full;
-        done.right = (th.left + th.right) / 2;
-        if (tb == g_seek && !cur_track()) done.right = done.left;     /* 曲が無いときは塗らない */
-        b2 = CreateSolidBrush(tb == g_seek ? theme_accent() : theme_dim_text());
-        if (done.right > done.left) FillRect(cd->hdc, &done, b2);
-        DeleteObject(b1);
-        DeleteObject(b2);
-        return CDRF_SKIPDEFAULT;
-    }
-    if (cd->dwItemSpec == TBCD_THUMB) {
-        RECT   th = cd->rc;
-        int    cx = (th.left + th.right) / 2, cy = (th.top + th.bottom) / 2, rr = S(6);
-        HBRUSH b = CreateSolidBrush(tb == g_seek ? theme_accent() : theme_text());
-        HBRUSH ob = (HBRUSH)SelectObject(cd->hdc, b);
-        HPEN   op = (HPEN)SelectObject(cd->hdc, GetStockObject(NULL_PEN));
-        if (tb == g_seek && !cur_track()) { SelectObject(cd->hdc, ob); SelectObject(cd->hdc, op); DeleteObject(b); return CDRF_SKIPDEFAULT; }
-        Ellipse(cd->hdc, cx - rr, cy - rr, cx + rr + 1, cy + rr + 1);
-        SelectObject(cd->hdc, ob);
-        SelectObject(cd->hdc, op);
-        DeleteObject(b);
-        return CDRF_SKIPDEFAULT;
-    }
-    return CDRF_DODEFAULT;
-}
-
-/* 横棒の溝をクリックしたら、その位置へ飛ぶ(既定は 1 ページずつしか動かない) */
-static LRESULT CALLBACK trackbar_subclass(HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR ref)
-{
-    (void)id; (void)ref;
-    if (msg == WM_LBUTTONDOWN) {
-        RECT ch, th;
-        int  x = GET_X_LPARAM(lp);
-        SendMessageW(h, TBM_GETCHANNELRECT, 0, (LPARAM)&ch);
-        SendMessageW(h, TBM_GETTHUMBRECT, 0, (LPARAM)&th);
-        if (x < th.left || x > th.right) {
-            int max = (int)SendMessageW(h, TBM_GETRANGEMAX, 0, 0);
-            int w = ch.right - ch.left;
-            int v = w > 0 ? MulDiv(x - ch.left, max, w) : 0;
-            if (v < 0) v = 0;
-            if (v > max) v = max;
-            SendMessageW(h, TBM_SETPOS, TRUE, v);
-            /* つまみが指の下に来たので、そのままドラッグにする */
-            SendMessageW(GetParent(h), WM_HSCROLL, MAKEWPARAM(TB_THUMBTRACK, v), (LPARAM)h);
-        }
-    } else if (msg == WM_SETFOCUS) {
-        SendMessageW(h, WM_UPDATEUISTATE, MAKEWPARAM(UIS_SET, UISF_HIDEFOCUS), 0);
-    }
-    return DefSubclassProc(h, msg, wp, lp);
-}
-
 /* ------------------------------------------------------------------ */
 /*  ダイアログ                                                          */
 /* ------------------------------------------------------------------ */
 
+static const WCHAR FF_HELP[] =
+    L"Firefox で music.youtube.com にログインしていれば、ボタンひとつで読み込めます。"
+    L"以後は起動のたびに Firefox から読み直すので、取り直しは要りません。"
+    L"(Chrome は cookie を暗号化しているため、外から読めません)";
+
 static const WCHAR AUTH_HELP[] =
-    L"自分のプレイリストを読むために、YouTube Music にログインしているブラウザの cookie を使います"
-    L"(曲の再生にはアカウントを使いません)。cookie は暗号化して ytm-lite.ini に保存します。\r\n\r\n"
-    L"1. ブラウザのシークレット(InPrivate)ウィンドウで music.youtube.com を開き、ログインする\r\n"
-    L"2. F12 で開発者ツールを開き、[ネットワーク] を「browse」で絞り込む\r\n"
-    L"3. ライブラリを開くなどして出てきた browse(POST)を選び、[要求ヘッダー] の cookie の値"
-    L"(またはヘッダー全体)をコピーして下に貼り付ける\r\n"
-    L"4. シークレットウィンドウを閉じる(同じセッションをブラウザで使い続けると cookie が入れ替わり、"
-    L"使えなくなることがある)";
+    L"手動で貼り付ける場合(Chrome、Edge など):\r\n"
+    L"1. music.youtube.com を開いて F12 → [ネットワーク] を開き、ページを再読み込みする\r\n"
+    L"2. 一番上の行(music.youtube.com)を右クリックして、\r\n"
+    L"    Chrome / Edge: [コピー] → [cURL としてコピー (bash)]\r\n"
+    L"    Firefox: [値をコピー] → [リクエストヘッダーをコピー]\r\n"
+    L"3. 下の欄に貼り付けて [保存](cookie は暗号化して ytm-lite.ini に置きます)";
+
+/* WM_COMMAND の IDOK で閉じたとき、何をしたかを返す */
+static WCHAR g_loginResult[256];
 
 static INT_PTR CALLBACK login_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg) {
     case WM_INITDIALOG:
+        SetDlgItemTextW(dlg, IDC_FF_HELP, FF_HELP);
         SetDlgItemTextW(dlg, IDC_AUTH_HELP, AUTH_HELP);
+        SetDlgItemTextW(dlg, IDC_FF_STATUS, g_cfg.cookieSource == COOKIE_FIREFOX ? L"いまは Firefox から読んでいます" :
+                                            g_cfg.cookieSource == COOKIE_PASTED ? L"いまは貼り付けた cookie を使っています" : L"");
         SendDlgItemMessageW(dlg, IDC_AUTH_TEXT, EM_LIMITTEXT, 256 * 1024, 0);
         theme_apply_window(dlg);
         return TRUE;
     case WM_CTLCOLORDLG: case WM_CTLCOLORSTATIC: case WM_CTLCOLOREDIT: case WM_CTLCOLORBTN:
         return theme_ctlcolor(msg, (HDC)wp, (HWND)lp, FALSE);
     case WM_COMMAND:
+        if (LOWORD(wp) == IDC_FF_BTN) {
+            char   err[256];
+            WCHAR *w;
+            if (cfg_use_firefox(NULL, err, sizeof(err))) {
+                wcscpy_s(g_loginResult, ARRAYSIZE(g_loginResult), L"Firefox から cookie を読み込みました");
+                EndDialog(dlg, IDOK);
+                return TRUE;
+            }
+            w = U2W(err);
+            SetDlgItemTextW(dlg, IDC_FF_STATUS, w ? w : L"読み込めませんでした");
+            free(w);
+            return TRUE;
+        }
         if (LOWORD(wp) == IDOK) {
             HWND   ed = GetDlgItem(dlg, IDC_AUTH_TEXT);
             int    n = GetWindowTextLengthW(ed);
@@ -748,6 +801,7 @@ static INT_PTR CALLBACK login_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
                                  L"SAPISID か __Secure-3PAPISID を含む cookie が必要です。", APP_NAME, MB_ICONWARNING);
                 return TRUE;
             }
+            wcscpy_s(g_loginResult, ARRAYSIZE(g_loginResult), L"貼り付けた cookie を保存しました");
             EndDialog(dlg, IDOK);
             return TRUE;
         }
@@ -800,11 +854,16 @@ static void on_library(LibResult *r)
 
     if (g_view >= 0 && g_view < g_entN) strncpy_s(viewId, sizeof(viewId), g_ent[g_view].id, _TRUNCATE);
     if (!r->ok) {
+        WCHAR *w = U2W(r->err);
+        wcsncpy_s(g_libErr, ARRAYSIZE(g_libErr), w ? w : L"", _TRUNCATE);
+        free(w);
         set_status_u8(r->err, TRUE);
+        InvalidateRect(g_tracks, NULL, TRUE);
         yt_free_playlists(&r->pls);
         free(r);
         return;
     }
+    g_libErr[0] = 0;
     /* 作り直す。読み込み済みの曲は引き継ぐ。URL で開いたものは後ろに残す */
     g_ent = NULL;
     g_entN = g_entCap = 0;
@@ -861,13 +920,37 @@ static void on_playlist(PlResult *r)
                 play_from(e->tl, g_cfg.shuffle ? -1 : 0);
             }
         } else {
-            set_status_u8(r->err, TRUE);
+            free(e->loadErr);
+            e->loadErr = U2W(r->err);       /* 一覧の中に出す */
+            if (i == g_view) InvalidateRect(g_tracks, NULL, TRUE);
         }
     }
     yt_free_tracks(&r->tracks);
     free(r->id);
     free(r->title);
     free(r);
+}
+
+static void on_progress(int count, char *id)
+{
+    int i = find_entry(id);
+    if (i >= 0 && g_ent[i].loading) {
+        g_ent[i].progress = count;
+        if (i == g_view) InvalidateRect(g_tracks, NULL, TRUE);
+    }
+    free(id);
+}
+
+/* 上限で待っている間の表示(1 秒ごとに残りを数える) */
+static void show_wait(void)
+{
+    WCHAR  text[200];
+    LONG64 left = (g_waitUntil - now_ms() + 999) / 1000;
+    if (left < 0) left = 0;
+    _snwprintf(text, ARRAYSIZE(text), L"曲を取りに行く回数の上限(5 分に 15 曲)に達しました。あと %d:%02d で読み込みます",
+               (int)(left / 60), (int)(left % 60));
+    text[ARRAYSIZE(text) - 1] = 0;
+    set_status(text, TRUE);
 }
 
 static void on_skip_error(const char *err)
@@ -903,6 +986,7 @@ static void on_audio(AudioResult *r)
     }
     if (r->gen != g_gen) { free_audio_result(r); return; }
     g_loadingAudio = FALSE;
+    g_waitUntil = 0;
     switch (r->code) {
     case YT_OK:
         player_open(&r->a, g_gen);
@@ -929,8 +1013,9 @@ static void on_player(int ev, int gen)
         set_status(L"", FALSE);
         player_status(NULL, NULL, &dur, NULL);
         if (!dur && cur_track()) dur = cur_track()->dur * 1000;
-        SendMessageW(g_seek, TBM_SETRANGEMAX, TRUE, dur / 1000 > 0 ? dur / 1000 : 1);
-        SendMessageW(g_seek, TBM_SETPOS, TRUE, 0);
+        SendMessageW(g_seek, SLM_SETRANGE, dur / 1000 > 0 ? dur / 1000 : 1, 0);
+        SendMessageW(g_seek, SLM_SETPOS, 0, 0);
+        SendMessageW(g_seek, SLM_SETACTIVE, TRUE, 0);
         ensure_timer(TRUE);
     } else if (ev == PEV_ENDED) {
         next_track(FALSE);
@@ -955,9 +1040,13 @@ static void on_tick(void)
             worker_audio(nv, 0, TRUE);
         }
     }
+    if (g_waitUntil && g_loadingAudio) show_wait();
     if (!IsIconic(g_wnd)) {
-        if (!g_dragging && gen == g_gen && st != PS_IDLE) SendMessageW(g_seek, TBM_SETPOS, TRUE, pos / 1000);
-        else if (!g_dragging && st == PS_IDLE && !g_loadingAudio) SendMessageW(g_seek, TBM_SETPOS, TRUE, 0);
+        if (!g_dragging && gen == g_gen && st != PS_IDLE) SendMessageW(g_seek, SLM_SETPOS, pos / 1000, 0);
+        else if (!g_dragging && st == PS_IDLE && !g_loadingAudio) {
+            SendMessageW(g_seek, SLM_SETPOS, 0, 0);
+            SendMessageW(g_seek, SLM_SETACTIVE, FALSE, 0);      /* 鳴り終わったら空の棒に */
+        }
         invalidate_bar();
     }
     if (st != PS_PLAYING && !g_loadingAudio) ensure_timer(FALSE);   /* 止まっている間は起きない */
@@ -1092,9 +1181,15 @@ static void on_command(int id)
         break;
     case IDB_MENU: show_menu(); break;
     case ID_M_LOGIN:
+        g_loginResult[0] = 0;
         if (DialogBoxParamW(g_inst, MAKEINTRESOURCEW(IDD_LOGIN), g_wnd, login_proc, 0) == IDOK) {
+            WCHAR text[300];
+            g_libErr[0] = 0;
             worker_library();
-            set_status(L"ライブラリを読み込み中…", FALSE);
+            _snwprintf(text, ARRAYSIZE(text), L"%s。ライブラリを読み込み中…", g_loginResult);
+            text[ARRAYSIZE(text) - 1] = 0;
+            set_status(text, FALSE);
+            InvalidateRect(g_tracks, NULL, TRUE);
         }
         break;
     case ID_M_OPENURL: open_url(); break;
@@ -1113,15 +1208,13 @@ static HWND make_button(int id)
                            g_wnd, (HMENU)(INT_PTR)id, g_inst, NULL);
 }
 
-static HWND make_trackbar(int id, int max, int pos)
+static HWND make_slider(int id, int style, int max, int pos)
 {
-    HWND t = CreateWindowExW(0, TRACKBAR_CLASSW, L"", WS_CHILD | WS_VISIBLE | TBS_HORZ | TBS_NOTICKS | TBS_FIXEDLENGTH,
-                             0, 0, 10, 10, g_wnd, (HMENU)(INT_PTR)id, g_inst, NULL);
-    SendMessageW(t, TBM_SETRANGE, FALSE, MAKELPARAM(0, max));
-    SendMessageW(t, TBM_SETPOS, TRUE, pos);
-    SendMessageW(t, TBM_SETTHUMBLENGTH, S(16), 0);
-    SendMessageW(t, TBM_SETPAGESIZE, 0, max / 10 ? max / 10 : 1);
-    SetWindowSubclass(t, trackbar_subclass, 1, 0);
+    HWND t = CreateWindowExW(0, SLIDER_CLASS, L"", WS_CHILD | WS_VISIBLE, 0, 0, 10, 10,
+                             g_wnd, (HMENU)(INT_PTR)id, g_inst, NULL);
+    SendMessageW(t, SLM_SETSTYLE, style, 0);
+    SendMessageW(t, SLM_SETRANGE, max, 0);
+    SendMessageW(t, SLM_SETPOS, pos, 0);
     return t;
 }
 
@@ -1156,17 +1249,15 @@ static void create_children(void)
     g_btn[3] = make_button(IDB_SHUFFLE);
     g_btn[4] = make_button(IDB_REPEAT);
     g_btn[5] = make_button(IDB_MENU);
-    g_seek = make_trackbar(IDC_SEEK, 1, 0);
-    g_vol = make_trackbar(IDC_VOL, 100, g_cfg.volume);
-    SendMessageW(g_vol, TBM_SETPAGESIZE, 0, 10);
+    g_seek = make_slider(IDC_SEEK, SLS_SEEK, 1, 0);
+    g_vol = make_slider(IDC_VOL, SLS_VOLUME, 100, g_cfg.volume);
+    SetWindowSubclass(g_tracks, tracks_subclass, 2, 0);    /* 空のときに「読み込み中…」などを出す */
 }
 
 static void apply_fonts(void)
 {
     SendMessageW(g_pls, WM_SETFONT, (WPARAM)g_font, TRUE);
     SendMessageW(g_tracks, WM_SETFONT, (WPARAM)g_font, TRUE);
-    SendMessageW(g_seek, TBM_SETTHUMBLENGTH, S(16), 0);
-    SendMessageW(g_vol, TBM_SETTHUMBLENGTH, S(16), 0);
 }
 
 static void apply_theme(void)
@@ -1274,21 +1365,19 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 }
                 return 0;
             }
-        } else if ((n->hwndFrom == g_seek || n->hwndFrom == g_vol) && n->code == NM_CUSTOMDRAW) {
-            return draw_trackbar((NMCUSTOMDRAW *)lp);
         }
         break;
     }
     case WM_HSCROLL:
         if ((HWND)lp == g_seek) {
             int code = LOWORD(wp);
-            if (code == TB_THUMBTRACK) { g_dragging = TRUE; InvalidateRect(h, NULL, FALSE); }
+            if (code == TB_THUMBTRACK) { g_dragging = TRUE; invalidate_bar(); }
             else if (code == TB_ENDTRACK) {
                 g_dragging = FALSE;
-                if (cur_track()) player_seek((int)SendMessageW(g_seek, TBM_GETPOS, 0, 0) * 1000);
+                if (cur_track()) player_seek((int)SendMessageW(g_seek, SLM_GETPOS, 0, 0) * 1000);
             }
         } else if ((HWND)lp == g_vol) {
-            g_cfg.volume = (int)SendMessageW(g_vol, TBM_GETPOS, 0, 0);
+            g_cfg.volume = (int)SendMessageW(g_vol, SLM_GETPOS, 0, 0);
             player_volume(g_cfg.volume);
         }
         return 0;
@@ -1314,19 +1403,28 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     case WM_TIMER:
         if (wp == TIMER_TICK) on_tick();
         else if (wp == TIMER_SKIP) { KillTimer(h, TIMER_SKIP); next_track(FALSE); }
+        else if (wp == TIMER_FETCH) {
+            Track *t = cur_track();
+            KillTimer(h, TIMER_FETCH);
+            if (t && g_loadingAudio) worker_audio(t->vid, g_gen, FALSE);
+        }
         return 0;
     case WM_APP_LIBRARY:  on_library((LibResult *)lp); return 0;
     case WM_APP_PLAYLIST: on_playlist((PlResult *)lp); return 0;
     case WM_APP_AUDIO:    on_audio((AudioResult *)lp); return 0;
     case WM_APP_PLAYER:   on_player((int)wp, (int)lp); InvalidateRect(g_btn[1], NULL, FALSE); return 0;
     case WM_APP_WAIT:
-        if (g_loadingAudio) {
-            WCHAR text[160];
-            if (wp) _snwprintf(text, ARRAYSIZE(text), L"YouTube への要求を控えるため、約 %d 秒待ってから読み込みます(10 分に 20 曲まで)", (int)wp);
-            else wcscpy_s(text, ARRAYSIZE(text), L"読み込み中…");
-            text[ARRAYSIZE(text) - 1] = 0;
-            set_status(text, FALSE);
+        if (wp && g_loadingAudio) {
+            g_waitUntil = now_ms() + (LONG64)wp * 1000;
+            show_wait();
+            ensure_timer(TRUE);                 /* 残りを 1 秒ごとに数える */
+        } else {
+            g_waitUntil = 0;
+            if (g_loadingAudio) set_status(L"曲を読み込み中…", FALSE);
         }
+        return 0;
+    case WM_APP_PROGRESS:
+        on_progress((int)wp, (char *)lp);
         return 0;
     case WM_CLOSE:
         save_placement();
@@ -1397,6 +1495,7 @@ int ui_run(HINSTANCE inst, BOOL mute, BOOL noActivate)
     wc.hCursor = LoadCursorW(NULL, IDC_ARROW);
     wc.lpszClassName = CLASS_NAME;
     RegisterClassExW(&wc);
+    slider_register(inst);
 
     x = g_cfg.x; y = g_cfg.y; w = g_cfg.w; h = g_cfg.h;
     if (w <= 0 || h <= 0) { x = y = CW_USEDEFAULT; w = 960; h = 600; }
@@ -1429,7 +1528,16 @@ int ui_run(HINSTANCE inst, BOOL mute, BOOL noActivate)
         worker_library();
         set_status(L"ライブラリを読み込み中…", FALSE);
     } else {
-        set_status(L"ログイン情報が未設定です。右下の … から設定するか、プレイリストの URL を開いてください", FALSE);
+        if (g_cfg.cookieSource == COOKIE_FIREFOX) {
+            WCHAR text[400], *ew = U2W(g_cfg.cookieErr);
+            _snwprintf(text, ARRAYSIZE(text), L"Firefox から cookie を読めませんでした: %s", ew ? ew : L"");
+            text[ARRAYSIZE(text) - 1] = 0;
+            wcsncpy_s(g_libErr, ARRAYSIZE(g_libErr), text, _TRUNCATE);
+            set_status(text, TRUE);
+            free(ew);
+        } else {
+            set_status(L"ログイン情報が未設定です。右下の … から設定するか、プレイリストの URL を開いてください", FALSE);
+        }
         if (g_cfg.lastPlaylist[0]) {
             int i = add_entry(g_cfg.lastPlaylist, NULL, NULL, FALSE);
             ListView_SetItemCountEx(g_pls, g_entN, 0);

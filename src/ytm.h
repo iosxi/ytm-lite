@@ -22,7 +22,7 @@
 #include <wchar.h>
 
 #define APP_NAME     L"ytm-lite"
-#define APP_VERSION  "3"            /* .rc の VERSIONINFO と .manifest も合わせて上げる */
+#define APP_VERSION  "4"            /* .rc の VERSIONINFO と .manifest も合わせて上げる */
 
 /* 画面のスレッドへ届ける通知 */
 #define WM_APP_LIBRARY   (WM_APP + 1)   /* lParam = LibResult*  */
@@ -30,6 +30,7 @@
 #define WM_APP_AUDIO     (WM_APP + 3)   /* lParam = AudioResult* */
 #define WM_APP_PLAYER    (WM_APP + 4)   /* wParam = PEV_*, lParam = gen */
 #define WM_APP_WAIT      (WM_APP + 5)   /* wParam = 待つ秒数(0 = 待ち終わり) */
+#define WM_APP_PROGRESS  (WM_APP + 6)   /* wParam = 読んだ曲数、lParam = プレイリスト ID(char*、受け取った側が free) */
 
 /* ---------------------------------------------------------------- util.c */
 typedef struct { char *p; size_t n, cap; } Buf;
@@ -95,7 +96,10 @@ void HttpRespFree(HttpResp *r);
 typedef struct {
     WCHAR ini[MAX_PATH];
     WCHAR dir[MAX_PATH];        /* ini のあるフォルダ(ログもここ) */
-    char *cookie;               /* アカウントの cookie(NULL = 未設定)。ini には DPAPI で暗号化して置く */
+    char *cookie;               /* アカウントの cookie(NULL = 未設定)。貼り付けたものは ini に DPAPI で暗号化して置く */
+    int   cookieSource;         /* COOKIE_* */
+    WCHAR ffProfile[MAX_PATH];  /* Firefox から読むときのプロファイルのフォルダ */
+    char  cookieErr[256];       /* 起動時に Firefox から読めなかった理由 */
     char  authuser[8];
     char  ua[512];              /* アカウントの要求に使う User-Agent(貼り付けたヘッダーにあればそれ) */
     char  visitor[1024];        /* 匿名側の visitorData(端末ごとに 1 つ持ち続ける。450 字ほどある) */
@@ -110,12 +114,31 @@ typedef struct {
     char  lastPlaylist[128];
 } Config;
 
+enum { COOKIE_NONE = 0, COOKIE_PASTED, COOKIE_FIREFOX };
+
 extern Config g_cfg;
 
 void cfg_init_path(const WCHAR *iniArg);
 void cfg_load(void);
 void cfg_save(void);
-void cfg_set_cookie(const char *cookie);     /* NULL で消す。すぐ ini に書く */
+void cfg_set_cookie(const char *cookie);     /* 貼り付けたもの。NULL で消す。すぐ ini に書く */
+BOOL cfg_use_firefox(const WCHAR *profile, char *err, size_t errlen);  /* 読めたら以後 Firefox から読む */
+BOOL cfg_reload_cookie(char *err, size_t errlen);   /* Firefox から読み直す(Firefox のときだけ) */
+
+/* ---------------------------------------------------------------- ffcookie.c */
+char *ff_read_youtube_cookies(const WCHAR *profileDir, int *count, char *err, size_t errlen);
+void  ff_user_agent(const WCHAR *profileDir, char *ua, size_t cap);
+BOOL  ff_find_profile(WCHAR *out, size_t cap);
+
+/* ---------------------------------------------------------------- slider.c */
+#define SLIDER_CLASS  L"ytm-slider"
+#define SLM_SETRANGE  (WM_USER + 1)     /* wParam = 最大 */
+#define SLM_SETPOS    (WM_USER + 2)     /* wParam = 位置(動かしている最中は無視) */
+#define SLM_GETPOS    (WM_USER + 3)
+#define SLM_SETSTYLE  (WM_USER + 4)     /* wParam = SLS_* */
+#define SLM_SETACTIVE (WM_USER + 5)     /* wParam = シークで曲があるか */
+enum { SLS_SEEK = 0, SLS_VOLUME };
+void slider_register(HINSTANCE inst);
 void cfg_save_guest(void);                   /* visitor と guest を書く */
 void cfg_save_cooldown(void);
 
@@ -161,6 +184,7 @@ BOOL yt_cookie_ok(const char *cookie);
 char *yt_playlist_id_from_text(const char *text);      /* URL や ID から ID を取り出す */
 int  yt_selftest_jar(void);                            /* 失敗の数 */
 void yt_set_wait_hook(void (*fn)(int sec));           /* 上限で待つとき秒数を、終わったら 0 を知らせる */
+void yt_set_progress_hook(void (*fn)(const char *id, int count));   /* プレイリストを 1 ページ読むごと */
 void yt_free_tracks(TrackList *t);
 void yt_free_playlists(PlaylistList *p);
 

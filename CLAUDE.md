@@ -16,7 +16,10 @@
 - アカウントの cookie は **music.youtube.com の browse だけ**に付ける。player（再生）の要求には付けない。
 - 再生は匿名の VISIONOS クライアント（PO トークンも JS も要らない）で、**1 台の端末としてのゲストのセッション**
   （ini の `visitor` と `guest`）を持ち続けて送る。毎回まっさらの匿名で送ると、数回でボット確認が返った（2026-10-12 実測）。
-- player は間隔 2 秒以上、10 分間に 20 回まで。並列にしない（`worker.c` の 1 本のスレッドだけが送る）。
+- player は間隔 2 秒以上、5 分間に 15 回まで（v4 まで 10 分に 20 回。本人の要望で緩めた）。
+  並列にしない（`worker.c` の 1 本のスレッドだけが送る）。「次へ」の連打は 0.4 秒待ってまとめる。
+- ログインしていても、再生の要求は匿名のまま。アカウントで player を呼べば上限は上がるが（yt-dlp Wiki: 約 2000 本/時）、
+  アカウントの BAN の危険と引き換えになるので、しない。
 - 429・403・ボット確認が返ったら 30 分止める（`cooldown_until`）。**テストのためにこれを消して回避しない。**
   止まったら時間をおくか、本人に相談する。
 
@@ -33,8 +36,10 @@
 
 - 通信しない検査: `ytm-lite.exe -selftest | cat`
 - 通信の確認: `-probe <videoId> [-decode]`、`-playlist <ID か URL> [-account]`、`-library`、`-setauth <ファイル>`
+- Firefox の cookie: `-ffcookies [<プロファイル>]`（名前・数・SHA-1 だけを出す。**値は出さない**）。
+  正しさは Python の sqlite3 で同じ文字列を作って SHA-1 を比べる（DEVELOPMENT.md）。
 - 画面: `ytm-lite.exe -ini <検証用 ini> -mute -noactivate`（音量 0、前面に出さない）。
-  操作は `tools/post.ps1`（`PostMessage`。`WM_HOTKEY` 1=再生/一時停止 2=次 3=前 4=停止、
+  操作は `tools/post.ps1`・`tools/seek.ps1`（`PostMessage`。`WM_HOTKEY` 1=再生/一時停止 2=次 3=前 4=停止、
   `WM_COMMAND` でボタン ID）、撮影は `tools/snap.ps1`（その窓だけを `PrintWindow`）。
 - ini のパスごとに二重起動を判定するので、利用者が動かしている本番と並べて動かせる。
 
