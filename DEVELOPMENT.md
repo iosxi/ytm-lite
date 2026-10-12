@@ -231,6 +231,7 @@ muutask の画面そのものは見ていない。
 - 読めるかは、muutask の `ReadThumbnail` と同じ手順（`OpenReadAsync` → `Size` → `ReadAsync`）の C++/WinRT の小さな読み手で確かめた。
   11,959 バイト、先頭 `FF D8`（JPEG）。**PowerShell 5.1 からは読めない**（WinRT の型を扱えず `IInputStream` への変換で
   `E_NOINTERFACE`）ので、それを見て「開けない」と判断しないこと。
+- 本人の環境で、muutask にジャケットが出ることを確かめてもらった（2026-10-13）。
 
 ### 効果が無かったので戻したもの（2026-10-12）
 
