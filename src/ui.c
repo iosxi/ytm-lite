@@ -707,19 +707,31 @@ static void get_layout(Layout *L)
     SetRect(&L->mid, x0, 0, x1, h);
     inner = midW - S(PAD) * 2;
 
-    /* ジャケット画像の下に積むもの: 曲名 2 行、アーティスト等 2 行、シークバー、時間、🔀⏮▶⏭🔁、音量… 。
-       操作の部分は詰めて小さく(本人の指摘「縦に広すぎる。ボタンはこんなに大きくなくていい」)、空いた分は画像に回す */
-    stack = S(10) + S(48) + S(2) + S(38) + S(8) + S(20) + S(16) + S(6) + S(44) + S(4) + S(28);
-    art = h - S(PAD) - stack - S(12);
-    if (art > inner) art = inner;
-    if (art < S(48)) art = S(48);
-    y = S(PAD);
-    SetRect(&L->art, x0 + S(PAD) + (inner - art) / 2, y, x0 + S(PAD) + (inner - art) / 2 + art, y + art);
-    y += art + S(10);
-    SetRect(&L->title, x0 + S(PAD), y, x1 - S(PAD), y + S(48));
-    y += S(48) + S(2);
-    SetRect(&L->sub, x0 + S(PAD), y, x1 - S(PAD), y + S(38));
-    y += S(38) + S(8);
+    /* ジャケット画像の下に積むもの: 曲名、アーティスト等、シークバー、時間、🔀⏮▶⏭🔁、音量… 。
+       操作の部分は詰めて小さく(本人の指摘「縦に広すぎる。ボタンはこんなに大きくなくていい」)、空いた分は画像に回す。
+       曲名とアーティスト等はふつう 2 行ずつ。それだと画像が欄の幅いっぱいに届かない低い窓では 1 行ずつにし、
+       上の余白も詰めて画像を大きくする(本人の指摘「最も小さくしたとき、アルバムアートがとても小さい」) */
+    {
+        int titleH = 48, subH = 38, top = PAD;
+        stack = S(10) + S(48) + S(2) + S(38) + S(8) + S(20) + S(16) + S(6) + S(44) + S(4) + S(28);
+        art = h - S(top) - stack - S(12);
+        if (art < inner) {
+            titleH = 26;
+            subH = 20;
+            top = 10;
+            stack = S(8) + S(titleH) + S(2) + S(subH) + S(8) + S(20) + S(16) + S(6) + S(44) + S(4) + S(28);
+            art = h - S(top) - stack - S(8);
+        }
+        if (art > inner) art = inner;
+        if (art < S(48)) art = S(48);
+        y = S(top);
+        SetRect(&L->art, x0 + S(PAD) + (inner - art) / 2, y, x0 + S(PAD) + (inner - art) / 2 + art, y + art);
+        y += art + (titleH == 48 ? S(10) : S(8));
+        SetRect(&L->title, x0 + S(PAD), y, x1 - S(PAD), y + S(titleH));
+        y += S(titleH) + S(2);
+        SetRect(&L->sub, x0 + S(PAD), y, x1 - S(PAD), y + S(subH));
+        y += S(subH) + S(8);
+    }
     SetRect(&L->seek, x0 + S(PAD) - S(6), y, x1 - S(PAD) + S(6), y + S(20));   /* 横棒のつまみの分、少し外へ */
     y += S(20);
     SetRect(&L->timeL, x0 + S(PAD), y, x0 + S(PAD) + S(60), y + S(16));
@@ -1824,9 +1836,12 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
     case WM_GETMINMAXINFO: {
         MINMAXINFO *mi = (MINMAXINFO *)lp;
-        /* 3 つの欄の下限の合計。高さは真ん中の欄(小さな画像 + 曲名・操作)が収まるまで */
-        mi->ptMinTrackSize.x = S(LEFT_MIN + MID_MIN + RIGHT_MIN) + 2;
-        mi->ptMinTrackSize.y = S(400);
+        /* 3 つの欄の下限の合計。高さは真ん中の欄(小さな画像 + 曲名・操作)が収まるまで。
+           窓を作る最初(WM_CREATE より前)にも来るので、g_dpi ではなくこの窓の DPI で求める
+           (g_dpi のまま 96 で求めて、125% の画面で本来より小さい窓になっていた。2026-10-13) */
+        UINT dpi = GetDpiForWindow(h);
+        mi->ptMinTrackSize.x = MulDiv(LEFT_MIN + MID_MIN + RIGHT_MIN, (int)dpi, 96) + 2;
+        mi->ptMinTrackSize.y = MulDiv(400, (int)dpi, 96);
         return 0;
     }
     case WM_DPICHANGED: {
