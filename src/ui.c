@@ -742,10 +742,11 @@ static void draw_button(DRAWITEMSTRUCT *di)
 /*  ダイアログ                                                          */
 /* ------------------------------------------------------------------ */
 
+/* 2026-10-13: 遠隔の利用者の Firefox が 2 日続けてログオフされた。ふだん使いの Firefox と
+   同じセッションを ytm-lite が使っていたのが原因と見ている(推測。DEVELOPMENT.md)。そのため注意書きを付ける */
 static const WCHAR FF_HELP[] =
-    L"Firefox で music.youtube.com にログインしていれば、ボタンひとつで読み込めます。"
-    L"以後は起動のたびに Firefox から読み直すので、取り直しは要りません。"
-    L"(Chrome は cookie を暗号化しているため、外から読めません)";
+    L"Firefox でログインしていれば、ボタンひとつで読み込めます。ただし、その Firefox で YouTube を"
+    L"使い続けると、その Firefox がログオフされることがあります。ytm-lite 専用の Firefox で使ってください。";
 
 /* フォルダを選ぶ(Portable 版のフォルダやプロファイル) */
 static BOOL pick_folder(HWND owner, WCHAR *out, size_t cap)
@@ -785,25 +786,56 @@ static void open_in_firefox(HWND dlg, const WCHAR *given)
     ShellExecuteW(dlg, L"open", url, NULL, NULL, SW_SHOWNORMAL);
 }
 
-static const WCHAR AUTH_HELP[] =
-    L"手動で貼り付ける場合(Chrome、Edge など):\r\n"
-    L"1. music.youtube.com を開いて F12 → [ネットワーク] を開き、ページを再読み込みする\r\n"
-    L"2. 一番上の行(music.youtube.com)を右クリックして、\r\n"
-    L"    Chrome / Edge: [コピー] → [cURL としてコピー (bash)]\r\n"
-    L"    Firefox: [値をコピー] → [リクエストヘッダーをコピー]\r\n"
-    L"3. 下の欄に貼り付けて [保存](cookie は暗号化して ytm-lite.ini に置きます)";
-
 /* WM_COMMAND の IDOK で閉じたとき、何をしたかを返す */
 static WCHAR g_loginResult[256];
+
+/* ダイアログの見出し(太字)と URL(下線)の字体 */
+static HFONT g_dlgBold, g_dlgLink;
+
+static void make_dialog_fonts(HWND dlg)
+{
+    LOGFONTW lf;
+    HFONT    base = (HFONT)SendMessageW(dlg, WM_GETFONT, 0, 0);
+    if (g_dlgBold) DeleteObject(g_dlgBold);
+    if (g_dlgLink) DeleteObject(g_dlgLink);
+    g_dlgBold = g_dlgLink = NULL;
+    if (!base || !GetObjectW(base, sizeof(lf), &lf)) return;
+    lf.lfWeight = FW_BOLD;
+    g_dlgBold = CreateFontIndirectW(&lf);
+    lf.lfWeight = FW_NORMAL;
+    lf.lfUnderline = TRUE;
+    g_dlgLink = CreateFontIndirectW(&lf);
+}
+
+static void copy_text(HWND owner, const WCHAR *s)
+{
+    size_t  n = (wcslen(s) + 1) * sizeof(WCHAR);
+    HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, n);
+    if (!h) return;
+    memcpy(GlobalLock(h), s, n);
+    GlobalUnlock(h);
+    if (OpenClipboard(owner)) {
+        EmptyClipboard();
+        if (!SetClipboardData(CF_UNICODETEXT, h)) GlobalFree(h);
+        CloseClipboard();
+    } else {
+        GlobalFree(h);
+    }
+}
 
 static INT_PTR CALLBACK login_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg) {
     case WM_INITDIALOG:
         SetDlgItemTextW(dlg, IDC_FF_HELP, FF_HELP);
-        SetDlgItemTextW(dlg, IDC_AUTH_HELP, AUTH_HELP);
         SetDlgItemTextW(dlg, IDC_FF_STATUS, g_cfg.cookieSource == COOKIE_FIREFOX ? L"いまは Firefox から読んでいます" :
-                                            g_cfg.cookieSource == COOKIE_PASTED ? L"いまは貼り付けた cookie を使っています" : L"");
+                                            g_cfg.cookieSource == COOKIE_PASTED ? L"いまは貼り付けたものを使っています" : L"");
+        make_dialog_fonts(dlg);
+        if (g_dlgBold) {
+            SendDlgItemMessageW(dlg, IDC_H1, WM_SETFONT, (WPARAM)g_dlgBold, FALSE);
+            SendDlgItemMessageW(dlg, IDC_H2, WM_SETFONT, (WPARAM)g_dlgBold, FALSE);
+        }
+        if (g_dlgLink) SendDlgItemMessageW(dlg, IDC_URL_LINK, WM_SETFONT, (WPARAM)g_dlgLink, FALSE);
         if (g_cfg.cookieSource == COOKIE_FIREFOX) SetDlgItemTextW(dlg, IDC_FF_PATH, g_cfg.ffProfile);
         SendDlgItemMessageW(dlg, IDC_FF_PATH, EM_SETCUEBANNER, TRUE, (LPARAM)L"空なら自動で探します(Portable 版はそのフォルダを指定)");
         SendDlgItemMessageW(dlg, IDC_AUTH_TEXT, EM_LIMITTEXT, 256 * 1024, 0);
@@ -818,9 +850,31 @@ static INT_PTR CALLBACK login_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
     case WM_ACTIVATE:
         theme_title_bar(dlg);           /* アクティブ・非アクティブのたびに付け直す */
         break;
-    case WM_CTLCOLORDLG: case WM_CTLCOLORSTATIC: case WM_CTLCOLOREDIT: case WM_CTLCOLORBTN:
+    case WM_DESTROY:
+        if (g_dlgBold) { DeleteObject(g_dlgBold); g_dlgBold = NULL; }
+        if (g_dlgLink) { DeleteObject(g_dlgLink); g_dlgLink = NULL; }
+        break;
+    case WM_SETCURSOR:
+        if ((HWND)wp == GetDlgItem(dlg, IDC_URL_LINK)) {     /* URL の上では指の形 */
+            SetCursor(LoadCursorW(NULL, IDC_HAND));
+            SetWindowLongPtrW(dlg, DWLP_MSGRESULT, TRUE);
+            return TRUE;
+        }
+        break;
+    case WM_CTLCOLORSTATIC: {
+        int id = GetDlgCtrlID((HWND)lp);
+        LRESULT r = theme_ctlcolor(msg, (HDC)wp, (HWND)lp, id == IDC_H1_NOTE || id == IDC_COPY_NOTE || id == IDC_STEP8_NOTE);
+        if (id == IDC_URL_LINK) SetTextColor((HDC)wp, theme_is_dark() ? RGB(110, 170, 255) : RGB(0, 102, 204));
+        return r;
+    }
+    case WM_CTLCOLORDLG: case WM_CTLCOLOREDIT: case WM_CTLCOLORBTN:
         return theme_ctlcolor(msg, (HDC)wp, (HWND)lp, FALSE);
     case WM_COMMAND:
+        if (LOWORD(wp) == IDC_URL_LINK && HIWORD(wp) == STN_CLICKED) {
+            copy_text(dlg, L"https://music.youtube.com/");
+            SetDlgItemTextW(dlg, IDC_COPY_NOTE, L"コピーしました");
+            return TRUE;
+        }
         if (LOWORD(wp) == IDC_FF_BROWSE) {
             WCHAR path[MAX_PATH];
             if (pick_folder(dlg, path, MAX_PATH)) SetDlgItemTextW(dlg, IDC_FF_PATH, path);

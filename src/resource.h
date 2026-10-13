@@ -13,3 +13,10 @@
 #define IDC_FF_PATH      1008
 #define IDC_FF_BROWSE    1009
 #define IDC_FF_OPEN      1010
+#define IDC_H1           1011
+#define IDC_H1_NOTE      1012
+#define IDC_URL_LINK     1013
+#define IDC_COPY_NOTE    1014
+#define IDC_H2           1015
+#define IDC_STEP7        1016
+#define IDC_STEP8_NOTE   1017
