@@ -22,7 +22,7 @@
 #include <wchar.h>
 
 #define APP_NAME     L"ytm-lite"
-#define APP_VERSION  "18"            /* .rc の VERSIONINFO と .manifest も合わせて上げる */
+#define APP_VERSION  "19"            /* .rc の VERSIONINFO と .manifest も合わせて上げる */
 
 /* 画面のスレッドへ届ける通知 */
 #define WM_APP_LIBRARY   (WM_APP + 1)   /* lParam = LibResult*  */
@@ -191,6 +191,11 @@ typedef struct {
 } Track;
 
 typedef struct { Track *v; int n, cap; } TrackList;
+
+/* m3u.c: プレイリストの曲を M3U に書き出す(#EXTINF と曲の URL を 1 曲ずつ) */
+char *m3u_build(const TrackList *t, const WCHAR *name);                       /* UTF-8、CRLF。free する */
+int   m3u_save(const WCHAR *path, const TrackList *t, const WCHAR *name, char *err, size_t errlen);   /* 書いた曲数、失敗は -1 */
+int   m3u_selftest_build(void);                                                 /* 失敗の数 */
 typedef struct { Playlist *v; int n, cap; } PlaylistList;
 
 /* 再生側の結果 */

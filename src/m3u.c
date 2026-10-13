@@ -189,3 +189,93 @@ int m3u_selftest(void)
     }
     return fail;
 }
+
+/* ------------------------------------------------------------------ */
+/*  書き出し: プレイリストの曲を、ふつうの M3U(拡張 M3U)として         */
+/*  #EXTINF:秒数,アーティスト - 曲名 と曲の URL を 1 曲ずつ並べる。       */
+/*  本人の指定(2026-10-13)。ほかのプレイヤー(VLC や mpv など)でも読める形 */
+/* ------------------------------------------------------------------ */
+
+/* 改行を空白に(1 行に収める) */
+static void add_line_text(Buf *b, const WCHAR *w)
+{
+    char *u = W2U(w ? w : L""), *p;
+    if (!u) return;
+    for (p = u; *p; p++) if (*p == '\r' || *p == '\n') *p = ' ';
+    BufAddStr(b, u);
+    free(u);
+}
+
+/* UTF-8 の M3U の中身(CRLF)。呼ぶ側で free */
+char *m3u_build(const TrackList *t, const WCHAR *name)
+{
+    Buf b = {0};
+    int i;
+    BufAddStr(&b, "#EXTM3U\r\n");
+    if (name && *name) {
+        BufAddStr(&b, "#PLAYLIST:");
+        add_line_text(&b, name);
+        BufAddStr(&b, "\r\n");
+    }
+    for (i = 0; i < t->n; i++) {
+        const Track *k = &t->v[i];
+        if (!k->vid[0]) continue;
+        BufAddf(&b, "#EXTINF:%d,", k->dur > 0 ? k->dur : -1);
+        if (k->artist && k->artist[0]) {
+            add_line_text(&b, k->artist);
+            BufAddStr(&b, " - ");
+        }
+        add_line_text(&b, k->title);
+        BufAddf(&b, "\r\nhttps://music.youtube.com/watch?v=%s\r\n", k->vid);
+    }
+    return b.p;
+}
+
+/* 書けた曲の数を返す(失敗は -1) */
+int m3u_save(const WCHAR *path, const TrackList *t, const WCHAR *name, char *err, size_t errlen)
+{
+    char  *s = m3u_build(t, name);
+    HANDLE f;
+    DWORD  n, wr = 0;
+    BOOL   ok;
+    int    i, count = 0;
+    if (!s) { _snprintf(err, errlen, "書き出す中身を作れませんでした"); err[errlen - 1] = 0; return -1; }
+    n = (DWORD)strlen(s);
+    f = CreateFileW(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (f == INVALID_HANDLE_VALUE) {
+        free(s);
+        _snprintf(err, errlen, "ファイルを作れませんでした");
+        err[errlen - 1] = 0;
+        return -1;
+    }
+    ok = WriteFile(f, s, n, &wr, NULL) && wr == n;
+    CloseHandle(f);
+    free(s);
+    if (!ok) { _snprintf(err, errlen, "ファイルに書けませんでした"); err[errlen - 1] = 0; return -1; }
+    for (i = 0; i < t->n; i++) if (t->v[i].vid[0]) count++;
+    return count;
+}
+
+int m3u_selftest_build(void)
+{
+    Track     v[2];
+    TrackList t;
+    char     *s;
+    int       fail = 0;
+    memset(v, 0, sizeof(v));
+    strcpy_s(v[0].vid, sizeof(v[0].vid), "abcdefghijk");
+    v[0].title = (WCHAR *)L"Song\r\nOne";
+    v[0].artist = (WCHAR *)L"Artist";
+    v[0].dur = 125;
+    strcpy_s(v[1].vid, sizeof(v[1].vid), "lmnopqrstuv");
+    v[1].title = (WCHAR *)L"Two";
+    t.v = v;
+    t.n = 2;
+    t.cap = 2;
+    s = m3u_build(&t, L"List");
+    fail += !s || strcmp(s, "#EXTM3U\r\n#PLAYLIST:List\r\n"
+                            "#EXTINF:125,Artist - Song  One\r\nhttps://music.youtube.com/watch?v=abcdefghijk\r\n"
+                            "#EXTINF:-1,Two\r\nhttps://music.youtube.com/watch?v=lmnopqrstuv\r\n") != 0;
+    free(s);
+    return fail;
+}

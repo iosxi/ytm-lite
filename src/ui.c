@@ -47,6 +47,7 @@
 #define ID_M_LOGOUT  304
 #define ID_M_VERSION 305
 #define ID_M_OPENM3U 306
+#define ID_M_SAVEM3U 307
 
 #define TIMER_TICK   1
 #define TIMER_SKIP   2
@@ -1649,6 +1650,52 @@ static void open_m3u(void)
     if (pick_m3u(g_wnd, path, MAX_PATH)) add_m3u(path, TRUE);
 }
 
+/* いま表示しているプレイリストの曲を M3U に書き出す(本人の指定: ファイル名は標準のダイアログで自由に) */
+static void save_m3u(void)
+{
+    static const COMDLG_FILTERSPEC types[] = {
+        { L"M3U プレイリスト UTF-8 (*.m3u8)", L"*.m3u8" },
+        { L"M3U プレイリスト (*.m3u)", L"*.m3u" },
+    };
+    IFileSaveDialog *fd = NULL;
+    IShellItem      *it = NULL;
+    WCHAR           *path = NULL, fname[MAX_PATH], *p;
+    const WCHAR     *name;
+    DWORD            opt;
+
+    if (!g_viewTL || !g_viewTL->t.n || g_view < 0 || g_view >= g_entN) return;
+    name = is_placeholder(g_ent[g_view].title) ? NULL : g_ent[g_view].title;
+    /* 最初のファイル名はプレイリストの名前(ファイル名に使えない字は _ に) */
+    wcsncpy_s(fname, MAX_PATH, name ? name : L"playlist", _TRUNCATE);
+    for (p = fname; *p; p++) if (wcschr(L"\\/:*?\"<>|", *p) || *p < 32) *p = L'_';
+    if (FAILED(CoCreateInstance(&CLSID_FileSaveDialog, NULL, CLSCTX_INPROC_SERVER, &IID_IFileSaveDialog, (void **)&fd))) return;
+    if (SUCCEEDED(IFileSaveDialog_GetOptions(fd, &opt)))
+        IFileSaveDialog_SetOptions(fd, opt | FOS_FORCEFILESYSTEM | FOS_OVERWRITEPROMPT);
+    IFileSaveDialog_SetFileTypes(fd, ARRAYSIZE(types), types);
+    IFileSaveDialog_SetDefaultExtension(fd, L"m3u8");
+    IFileSaveDialog_SetFileName(fd, fname);
+    IFileSaveDialog_SetTitle(fd, L"M3U を書き出す(このプレイリストの曲を 1 曲ずつ)");
+    if (SUCCEEDED(IFileSaveDialog_Show(fd, g_wnd)) && SUCCEEDED(IFileSaveDialog_GetResult(fd, &it))) {
+        if (SUCCEEDED(IShellItem_GetDisplayName(it, SIGDN_FILESYSPATH, &path))) {
+            char  err[160];
+            int   n = m3u_save(path, &g_viewTL->t, name, err, sizeof(err));
+            WCHAR text[600];
+            if (n >= 0) {
+                _snwprintf(text, ARRAYSIZE(text), L"M3U に %d 曲を書き出しました: %s", n, path);
+            } else {
+                WCHAR *ew = U2W(err);
+                _snwprintf(text, ARRAYSIZE(text), L"M3U を書き出せませんでした(%s): %s", ew ? ew : L"", path);
+                free(ew);
+            }
+            text[ARRAYSIZE(text) - 1] = 0;
+            set_status(text, n < 0);
+            CoTaskMemFree(path);
+        }
+        IShellItem_Release(it);
+    }
+    IFileSaveDialog_Release(fd);
+}
+
 /* エクスプローラーから落とされたもの。M3U として読めたものを並べる */
 static void on_drop(HDROP drop)
 {
@@ -1683,6 +1730,7 @@ static void show_menu(void)
     AppendMenuW(m, MF_STRING, ID_M_LOGIN, g_cfg.cookie ? L"ログイン情報を設定し直す…" : L"ログイン情報を設定…");
     AppendMenuW(m, MF_STRING, ID_M_OPENURL, L"プレイリストの URL を開く…");
     AppendMenuW(m, MF_STRING, ID_M_OPENM3U, L"M3U を開く…");
+    AppendMenuW(m, MF_STRING | (g_viewTL && g_viewTL->t.n ? 0 : MF_GRAYED), ID_M_SAVEM3U, L"M3U を書き出す…");
     AppendMenuW(m, MF_STRING, ID_M_REFRESH, L"読み直す\tF5");
     if (g_cfg.cookie) AppendMenuW(m, MF_STRING, ID_M_LOGOUT, L"ログイン情報を消す");
     AppendMenuW(m, MF_SEPARATOR, 0, NULL);
@@ -1728,6 +1776,7 @@ static void on_command(int id)
         break;
     case ID_M_OPENURL: open_url(); break;
     case ID_M_OPENM3U: open_m3u(); break;
+    case ID_M_SAVEM3U: save_m3u(); break;
     case ID_M_REFRESH: refresh_all(); break;
     case ID_M_LOGOUT: logout(); break;
     }

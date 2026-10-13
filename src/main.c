@@ -13,7 +13,8 @@
  *  ytm-lite.exe -probe <videoId> [-decode] [-save <m4a>]
  *                                           匿名の player と音声の取得(-decode で最後まで復号)
  *  ytm-lite.exe -playtest <m4a> [-seconds N]  手元のファイルを音量 0 で鳴らしメモリを報告(通信しない)
- *  ytm-lite.exe -playlist <ID か URL> [-account]   プレイリストを読む(既定は匿名)
+ *  ytm-lite.exe -playlist <ID か URL> [-account] [-m3uout <file>]
+ *                                           プレイリストを読む(既定は匿名)。-m3uout で曲を M3U に書き出す
  *  ytm-lite.exe -library                    ライブラリのプレイリスト一覧(要ログイン情報)
  *  ytm-lite.exe -setauth <file>             ファイルの中身(要求ヘッダーなど)をログイン情報にする
  *  ytm-lite.exe -ffcookies [<profile>]      Firefox から YouTube の cookie を読めるか(名前と数だけ出す)
@@ -107,6 +108,7 @@ static void selftest(void)
     CHECK(yt_selftest_jar() == 0, "guest cookie jar: add, update, delete");
     CHECK(yt_selftest_setcookie() == 0, "set-cookie: deletion and login cookie names");
     CHECK(m3u_selftest() == 0, "m3u: urls, ids, #EXTINF names, duplicates, UTF-8 / Shift_JIS");
+    CHECK(m3u_selftest_build() == 0, "m3u: export tracks (#EXTINF, watch URLs, newlines)");
 
     Sha1Hex("abc", h);
     CHECK(!strcmp(h, "a9993e364706816aba3e25717850c26c9cd0d89d"), "sha1: abc");
@@ -317,8 +319,15 @@ int cli_main(int argc, WCHAR **argv)
         int       i;
         if (!id) { out_printf("not a playlist id"); free(text); return 1; }
         if (yt_playlist(id, &t, has_arg(argc, argv, L"-account"), &title, err, sizeof(err))) {
+            const WCHAR *out = arg_after(argc, argv, L"-m3uout");
             print_w("title=", title);
             out_printf("tracks=%d", t.n);
+            if (out) {
+                /* 画面の「M3U を書き出す…」と同じ書き出し(ダイアログを出さずに確かめるため) */
+                int n = m3u_save(out, &t, title, err, sizeof(err));
+                if (n >= 0) out_printf("m3u: %d tracks written", n);
+                else out_printf("m3u: %s", err);
+            }
             for (i = 0; i < t.n && i < 20; i++) {
                 char *ti = W2U(t.v[i].title), *ar = W2U(t.v[i].artist);
                 out_printf("  %s  %d:%02d  %s / %s%s", t.v[i].vid, t.v[i].dur / 60, t.v[i].dur % 60, ti ? ti : "", ar ? ar : "",
