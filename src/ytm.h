@@ -22,7 +22,7 @@
 #include <wchar.h>
 
 #define APP_NAME     L"ytm-lite"
-#define APP_VERSION  "12"            /* .rc の VERSIONINFO と .manifest も合わせて上げる */
+#define APP_VERSION  "13"            /* .rc の VERSIONINFO と .manifest も合わせて上げる */
 
 /* 画面のスレッドへ届ける通知 */
 #define WM_APP_LIBRARY   (WM_APP + 1)   /* lParam = LibResult*  */
@@ -118,6 +118,7 @@ typedef struct {
     int   thumbSize;            /* ジャケット画像の一辺(px)。既定 544 */
     int   debug;
     char  lastPlaylist[128];
+    WCHAR m3u[MAX_PATH];        /* 起動時に読み直す M3U(プレイリストの URL を並べたもの) */
 } Config;
 
 enum { COOKIE_NONE = 0, COOKIE_PASTED, COOKIE_FIREFOX };
@@ -129,6 +130,7 @@ void cfg_load(void);
 void cfg_save(void);
 void cfg_set_cookie(const char *cookie);     /* 貼り付けたもの。NULL で消す。すぐ ini に書く */
 BOOL cfg_use_firefox(const WCHAR *profile, char *err, size_t errlen);  /* 読めたら以後 Firefox から読む */
+void cfg_set_m3u(const WCHAR *path);          /* 起動時に読み直す M3U。すぐ ini に書く */
 BOOL cfg_reload_cookie(char *err, size_t errlen);   /* Firefox から読み直す(Firefox のときだけ) */
 
 /* ---------------------------------------------------------------- ffcookie.c */
@@ -138,6 +140,14 @@ BOOL  ff_find_profile(WCHAR *out, size_t cap);
 BOOL  ff_resolve_profile(const WCHAR *given, WCHAR *out, size_t cap);   /* フォルダや exe からプロファイルへ */
 BOOL  ff_launcher_for_profile(const WCHAR *profile, WCHAR *exe, size_t cap);
 int   ff_candidates(WCHAR (*list)[MAX_PATH], int max);
+
+/* ---------------------------------------------------------------- m3u.c */
+typedef struct { char *id; WCHAR *title; } M3uItem;    /* title は #EXTINF の名前(無ければ NULL) */
+typedef struct { M3uItem *v; int n, cap, skipped; } M3uList;
+int   m3u_parse(const void *data, size_t n, M3uList *out);           /* 見つけた数 */
+BOOL  m3u_load(const WCHAR *path, M3uList *out, char *err, size_t errlen);
+void  m3u_free(M3uList *l);
+int   m3u_selftest(void);                                           /* 失敗の数 */
 
 /* ---------------------------------------------------------------- smtc.c */
 BOOL smtc_init(HWND hwnd);
@@ -265,7 +275,7 @@ void     theme_draw_button(const DRAWITEMSTRUCT *di); /* ダイアログの押�
 LRESULT  theme_ctlcolor(UINT msg, HDC dc, HWND ctl, BOOL dimText);
 
 /* ---------------------------------------------------------------- ui.c / main.c */
-int  ui_run(HINSTANCE inst, BOOL mute, BOOL noActivate);
+int  ui_run(HINSTANCE inst, BOOL mute, BOOL noActivate, const WCHAR *openM3u);   /* openM3u: 開く M3U(NULL 可) */
 int  cli_main(int argc, WCHAR **argv);       /* -probe などを処理したら 1 */
 extern HINSTANCE g_inst;
 

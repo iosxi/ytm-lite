@@ -28,6 +28,7 @@
 
 #define CLASS_NAME   L"ytm-lite"
 #define PROP_INI     L"ytm.ini"
+#define COPY_M3U     0x4D335501    /* WM_COPYDATA の dwData: M3U のパスを渡す */
 
 #define IDC_PLS      100
 #define IDC_TRACKS   101
@@ -45,6 +46,7 @@
 #define ID_M_REFRESH 303
 #define ID_M_LOGOUT  304
 #define ID_M_VERSION 305
+#define ID_M_OPENM3U 306
 
 #define TIMER_TICK   1
 #define TIMER_SKIP   2
@@ -69,6 +71,7 @@ typedef struct {
     char  *id;
     WCHAR *title, *sub;
     BOOL   account;        /* ライブラリから来たもの(アカウントで読む) */
+    BOOL   named;          /* M3U の #EXTINF で名前が付いている(読み込んでも名前を変えない) */
     TL    *tl;
     BOOL   loading;
     int    progress;       /* 読み込み中: ここまで読んだ曲数 */
@@ -198,6 +201,15 @@ static void clear_prefetch(void)
 /*  プレイリストの欄                                                    */
 /* ------------------------------------------------------------------ */
 
+/* 本当の名前が分かるまでの仮の名前 */
+#define TITLE_LOADING  L"(読み込み中…)"           /* URL で開いた(すぐ読み込む) */
+#define TITLE_UNLOADED L"(クリックで読み込み)"     /* M3U から並べた(選ぶまで読み込まない) */
+
+static BOOL is_placeholder(const WCHAR *t)
+{
+    return !t || !wcscmp(t, TITLE_LOADING) || !wcscmp(t, TITLE_UNLOADED);
+}
+
 static int find_entry(const char *id)
 {
     int i;
@@ -219,7 +231,7 @@ static int add_entry(const char *id, const WCHAR *title, const WCHAR *sub, BOOL 
     e = &g_ent[g_entN];
     memset(e, 0, sizeof(*e));
     e->id = U8Dup(id);
-    e->title = WDup(title ? title : L"(読み込み中…)");
+    e->title = WDup(title ? title : TITLE_LOADING);
     e->sub = WDup(sub);
     e->account = account;
     return g_entN++;
@@ -267,10 +279,11 @@ static BOOL tracks_overlay(WCHAR *buf, size_t cap, BOOL *err)
     {
         Entry *e = &g_ent[g_view];
         if (e->loading) {
-            int total = total_from_sub(e->sub);
-            if (e->progress && total) _snwprintf(buf, cap, L"「%s」を読み込み中…\r\n%d / %d 曲", e->title, e->progress, total);
-            else if (e->progress) _snwprintf(buf, cap, L"「%s」を読み込み中…\r\n%d 曲", e->title, e->progress);
-            else _snwprintf(buf, cap, L"「%s」を読み込み中…", e->title);
+            int          total = total_from_sub(e->sub);
+            const WCHAR *nm = is_placeholder(e->title) ? L"プレイリスト" : e->title;
+            if (e->progress && total) _snwprintf(buf, cap, L"「%s」を読み込み中…\r\n%d / %d 曲", nm, e->progress, total);
+            else if (e->progress) _snwprintf(buf, cap, L"「%s」を読み込み中…\r\n%d 曲", nm, e->progress);
+            else _snwprintf(buf, cap, L"「%s」を読み込み中…", nm);
         } else if (e->loadErr) {
             _snwprintf(buf, cap, L"読み込めませんでした\r\n%s", e->loadErr);
             *err = TRUE;
@@ -1009,7 +1022,7 @@ static void on_library(LibResult *r)
     for (i = 0; i < oldN; i++) {
         if (!old[i].account && find_entry(old[i].id) < 0) {
             int k = add_entry(old[i].id, old[i].title, old[i].sub, FALSE);
-            if (k >= 0) { g_ent[k].tl = old[i].tl; old[i].tl = NULL; g_ent[k].loading = old[i].loading; }
+            if (k >= 0) { g_ent[k].tl = old[i].tl; old[i].tl = NULL; g_ent[k].loading = old[i].loading; g_ent[k].named = old[i].named; }
         }
         free_entry(&old[i]);
     }
@@ -1040,7 +1053,7 @@ static void on_playlist(PlResult *r)
             TL *t = tl_new(&r->tracks);
             tl_release(e->tl);
             e->tl = t;
-            if (r->title && (!e->account || !e->title || !wcscmp(e->title, L"(読み込み中…)"))) {
+            if (r->title && !e->named && (!e->account || is_placeholder(e->title))) {
                 free(e->title);
                 e->title = r->title;
                 r->title = NULL;
@@ -1249,6 +1262,8 @@ static void pls_dispinfo(NMLVDISPINFOW *di)
 /*  メニューとコマンド                                                  */
 /* ------------------------------------------------------------------ */
 
+static int add_m3u(const WCHAR *path, BOOL explicitOpen);
+
 static void refresh_all(void)
 {
     int i;
@@ -1257,6 +1272,7 @@ static void refresh_all(void)
         tl_release(g_ent[i].tl);       /* 次に開いたときに読み直す */
         g_ent[i].tl = NULL;
     }
+    if (g_cfg.m3u[0]) add_m3u(g_cfg.m3u, FALSE);       /* M3U に足した行も拾う(通信しない) */
     if (g_cfg.cookie) { worker_library(); set_status(L"ライブラリを読み込み中…", FALSE); }
     if (g_view >= 0) load_entry(g_view);
 }
@@ -1270,6 +1286,109 @@ static void open_url(void)
     if (i < 0) { i = add_entry(id, NULL, NULL, FALSE); ListView_SetItemCountEx(g_pls, g_entN, 0); }
     free(id);
     if (i >= 0) select_entry(i);
+}
+
+/* ------------------------------------------------------------------ */
+/*  M3U(プレイリストの URL を並べたファイル)                            */
+/*                                                                     */
+/*  中の URL を左の欄に並べるだけで、通信はしない(中身は選んだときに     */
+/*  取りに行く。URL を開くのと同じ)。最後に開いた M3U を ini に覚えて、  */
+/*  起動時と「読み直す」で読み直す。                                     */
+/* ------------------------------------------------------------------ */
+
+/* 並べて、最初のものの位置を返す(読めなければ -1)。explicitOpen = 利用者が開いた(結果を知らせ、最初を選ぶ) */
+static int add_m3u(const WCHAR *path, BOOL explicitOpen)
+{
+    M3uList l;
+    char    err[160];
+    WCHAR   full[MAX_PATH], text[400];
+    int     i, first = -1, added = 0;
+
+    if (!GetFullPathNameW(path, MAX_PATH, full, NULL)) wcsncpy_s(full, MAX_PATH, path, _TRUNCATE);
+    if (!m3u_load(full, &l, err, sizeof(err))) {
+        WCHAR *ew = U2W(err);
+        _snwprintf(text, ARRAYSIZE(text), L"M3U を読めませんでした(%s): %s", ew ? ew : L"", full);
+        text[ARRAYSIZE(text) - 1] = 0;
+        set_status(text, TRUE);
+        free(ew);
+        m3u_free(&l);
+        return -1;
+    }
+    for (i = 0; i < l.n; i++) {
+        int k = find_entry(l.v[i].id);
+        if (k < 0) {
+            /* 名前が無ければ、選ぶまで中身を取りに行かないことが分かる言い方にする(読み込むと本当の名前になる) */
+            k = add_entry(l.v[i].id, l.v[i].title ? l.v[i].title : TITLE_UNLOADED, NULL, FALSE);
+            if (k < 0) continue;
+            g_ent[k].named = l.v[i].title != NULL;
+            added++;
+        } else if (l.v[i].title && !g_ent[k].account && !g_ent[k].named) {
+            /* URL や前の M3U で足した行に、こんど名前が付いた(ライブラリの行の名前は変えない) */
+            free(g_ent[k].title);
+            g_ent[k].title = WDup(l.v[i].title);
+            g_ent[k].named = TRUE;
+        }
+        if (first < 0) first = k;
+    }
+    ListView_SetItemCountEx(g_pls, g_entN, 0);
+    InvalidateRect(g_pls, NULL, TRUE);
+    cfg_set_m3u(full);
+    if (explicitOpen) {
+        if (l.skipped)
+            _snwprintf(text, ARRAYSIZE(text), L"M3U から %d 個のプレイリストを並べました(新しく足したもの %d 個、読めなかった行 %d)",
+                       l.n, added, l.skipped);
+        else
+            _snwprintf(text, ARRAYSIZE(text), L"M3U から %d 個のプレイリストを並べました(新しく足したもの %d 個)", l.n, added);
+        text[ARRAYSIZE(text) - 1] = 0;
+        set_status(text, FALSE);
+        if (first >= 0) select_entry(first);
+    }
+    m3u_free(&l);
+    return first;
+}
+
+static BOOL pick_m3u(HWND owner, WCHAR *out, size_t cap)
+{
+    static const COMDLG_FILTERSPEC types[] = {
+        { L"M3U プレイリスト (*.m3u, *.m3u8)", L"*.m3u;*.m3u8" },
+        { L"すべてのファイル (*.*)", L"*.*" },
+    };
+    IFileOpenDialog *fd = NULL;
+    IShellItem      *it = NULL;
+    WCHAR           *path = NULL;
+    BOOL             ok = FALSE;
+    DWORD            opt;
+    if (FAILED(CoCreateInstance(&CLSID_FileOpenDialog, NULL, CLSCTX_INPROC_SERVER, &IID_IFileOpenDialog, (void **)&fd))) return FALSE;
+    if (SUCCEEDED(IFileOpenDialog_GetOptions(fd, &opt)))
+        IFileOpenDialog_SetOptions(fd, opt | FOS_FORCEFILESYSTEM | FOS_FILEMUSTEXIST);
+    IFileOpenDialog_SetFileTypes(fd, ARRAYSIZE(types), types);
+    IFileOpenDialog_SetTitle(fd, L"M3U を開く(プレイリストの URL を 1 行に 1 つ書いたもの)");
+    if (SUCCEEDED(IFileOpenDialog_Show(fd, owner)) && SUCCEEDED(IFileOpenDialog_GetResult(fd, &it))) {
+        if (SUCCEEDED(IShellItem_GetDisplayName(it, SIGDN_FILESYSPATH, &path))) {
+            wcsncpy_s(out, cap, path, _TRUNCATE);
+            CoTaskMemFree(path);
+            ok = TRUE;
+        }
+        IShellItem_Release(it);
+    }
+    IFileOpenDialog_Release(fd);
+    return ok;
+}
+
+static void open_m3u(void)
+{
+    WCHAR path[MAX_PATH];
+    if (pick_m3u(g_wnd, path, MAX_PATH)) add_m3u(path, TRUE);
+}
+
+/* エクスプローラーから落とされたもの。M3U として読めたものを並べる */
+static void on_drop(HDROP drop)
+{
+    UINT  n = DragQueryFileW(drop, 0xFFFFFFFF, NULL, 0), i;
+    WCHAR path[MAX_PATH];
+    for (i = 0; i < n; i++)
+        if (DragQueryFileW(drop, i, path, MAX_PATH)) add_m3u(path, TRUE);
+    DragFinish(drop);
 }
 
 static void logout(void)
@@ -1295,6 +1414,7 @@ static void show_menu(void)
     _snwprintf(ver, ARRAYSIZE(ver), L"%s v%S", APP_NAME, APP_VERSION);
     AppendMenuW(m, MF_STRING, ID_M_LOGIN, g_cfg.cookie ? L"ログイン情報を設定し直す…" : L"ログイン情報を設定…");
     AppendMenuW(m, MF_STRING, ID_M_OPENURL, L"プレイリストの URL を開く…");
+    AppendMenuW(m, MF_STRING, ID_M_OPENM3U, L"M3U を開く…");
     AppendMenuW(m, MF_STRING, ID_M_REFRESH, L"読み直す\tF5");
     if (g_cfg.cookie) AppendMenuW(m, MF_STRING, ID_M_LOGOUT, L"ログイン情報を消す");
     AppendMenuW(m, MF_SEPARATOR, 0, NULL);
@@ -1339,6 +1459,7 @@ static void on_command(int id)
         }
         break;
     case ID_M_OPENURL: open_url(); break;
+    case ID_M_OPENM3U: open_m3u(); break;
     case ID_M_REFRESH: refresh_all(); break;
     case ID_M_LOGOUT: logout(); break;
     }
@@ -1573,6 +1694,22 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     case WM_APP_PROGRESS:
         on_progress((int)wp, (char *)lp);
         return 0;
+    case WM_DROPFILES:
+        on_drop((HDROP)wp);
+        return 0;
+    case WM_COPYDATA: {
+        /* 2 つめの ytm-lite.exe が、コマンドラインで渡された M3U をこちらへ回してきた */
+        const COPYDATASTRUCT *cd = (const COPYDATASTRUCT *)lp;
+        if (cd && cd->dwData == COPY_M3U && cd->lpData && cd->cbData >= sizeof(WCHAR) && cd->cbData <= MAX_PATH * sizeof(WCHAR)) {
+            WCHAR path[MAX_PATH];
+            size_t n = cd->cbData / sizeof(WCHAR);
+            memcpy(path, cd->lpData, n * sizeof(WCHAR));
+            path[n < MAX_PATH ? n : MAX_PATH - 1] = 0;
+            add_m3u(path, TRUE);
+            return TRUE;
+        }
+        return FALSE;
+    }
     case WM_APP_THUMB: {
         ThumbResult *r = (ThumbResult *)lp;
         if (r->gen == g_gen) smtc_thumbnail((const BYTE *)r->data.p, (DWORD)r->data.n);   /* 古い曲の画像は捨てる */
@@ -1621,6 +1758,8 @@ static DWORD ini_hash(void)
     return hsh;
 }
 
+static HWND g_otherWnd;
+
 static BOOL CALLBACK find_other(HWND w, LPARAM lp)
 {
     WCHAR cls[32];
@@ -1628,12 +1767,13 @@ static BOOL CALLBACK find_other(HWND w, LPARAM lp)
     if (!wcscmp(cls, CLASS_NAME) && (DWORD)(UINT_PTR)GetPropW(w, PROP_INI) == (DWORD)lp) {
         if (IsIconic(w)) ShowWindow(w, SW_RESTORE);
         SetForegroundWindow(w);
+        g_otherWnd = w;
         return FALSE;
     }
     return TRUE;
 }
 
-int ui_run(HINSTANCE inst, BOOL mute, BOOL noActivate)
+int ui_run(HINSTANCE inst, BOOL mute, BOOL noActivate, const WCHAR *openM3u)
 {
     WNDCLASSEXW wc;
     INITCOMMONCONTROLSEX icc;
@@ -1648,6 +1788,15 @@ int ui_run(HINSTANCE inst, BOOL mute, BOOL noActivate)
     mtx = CreateMutexW(NULL, TRUE, mname);
     if (mtx && GetLastError() == ERROR_ALREADY_EXISTS) {
         EnumWindows(find_other, (LPARAM)hsh);
+        if (g_otherWnd && openM3u && *openM3u) {
+            /* 動いている方に M3U を渡す(パスは main.c で絶対パスにしてある) */
+            COPYDATASTRUCT cd;
+            DWORD_PTR      res;
+            cd.dwData = COPY_M3U;
+            cd.cbData = (DWORD)((wcslen(openM3u) + 1) * sizeof(WCHAR));
+            cd.lpData = (void *)openM3u;
+            SendMessageTimeoutW(g_otherWnd, WM_COPYDATA, 0, (LPARAM)&cd, SMTO_ABORTIFHUNG, 5000, &res);
+        }
         CloseHandle(mtx);
         return 0;
     }
@@ -1680,6 +1829,7 @@ int ui_run(HINSTANCE inst, BOOL mute, BOOL noActivate)
     g_wnd = CreateWindowExW(0, CLASS_NAME, APP_NAME, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, x, y, w, h, NULL, NULL, inst, NULL);
     if (!g_wnd) return 1;
     SetPropW(g_wnd, PROP_INI, (HANDLE)(UINT_PTR)hsh);
+    DragAcceptFiles(g_wnd, TRUE);       /* M3U を落とせるように */
     if (g_cfg.w <= 0) {
         /* 初回: 96 DPI で 960x600 相当に */
         SetWindowPos(g_wnd, NULL, 0, 0, S(960), S(600), SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
@@ -1715,9 +1865,11 @@ int ui_run(HINSTANCE inst, BOOL mute, BOOL noActivate)
         if (g_cfg.lastPlaylist[0]) {
             int i = add_entry(g_cfg.lastPlaylist, NULL, NULL, FALSE);
             ListView_SetItemCountEx(g_pls, g_entN, 0);
-            if (i >= 0) select_entry(i);
+            if (i >= 0 && !(openM3u && *openM3u)) select_entry(i);   /* 開けと言われた M3U があればそちらを選ぶ */
         }
     }
+    if (openM3u && *openM3u) add_m3u(openM3u, TRUE);
+    else if (g_cfg.m3u[0]) add_m3u(g_cfg.m3u, FALSE);
 
     while (GetMessageW(&m, NULL, 0, 0) > 0) {
         if (m.message == WM_KEYDOWN && (m.hwnd == g_wnd || GetParent(m.hwnd) == g_wnd)) {

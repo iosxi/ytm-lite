@@ -140,6 +140,7 @@ void cfg_load(void)
     get_str(L"visitor", g_cfg.visitor, sizeof(g_cfg.visitor));
     get_str(L"guest", g_cfg.guest, sizeof(g_cfg.guest));
     get_str(L"last_playlist", g_cfg.lastPlaylist, sizeof(g_cfg.lastPlaylist));
+    GetPrivateProfileStringW(SEC, L"m3u", L"", g_cfg.m3u, MAX_PATH, g_cfg.ini);
     get_str(L"cooldown_until", tmp, sizeof(tmp));
     g_cfg.cooldownUntil = _atoi64(tmp);
 
@@ -291,6 +292,15 @@ BOOL cfg_use_firefox(const WCHAR *profile, char *err, size_t errlen)
     put_str(L"firefox_profile", p);
     free(p);
     return TRUE;
+}
+
+void cfg_set_m3u(const WCHAR *path)
+{
+    char *p;
+    wcsncpy_s(g_cfg.m3u, MAX_PATH, path ? path : L"", _TRUNCATE);
+    p = W2U(g_cfg.m3u);
+    put_str(L"m3u", p && *p ? p : NULL);
+    free(p);
 }
 
 void cfg_save_guest(void)

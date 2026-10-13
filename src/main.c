@@ -5,6 +5,7 @@
  *  ytm-lite.exe -ini <path>         別の ini で動かす(二重起動の判定も ini ごと)
  *  ytm-lite.exe -mute               音量 0 で鳴らす(検証用。処理は同じ)
  *  ytm-lite.exe -noactivate         窓を前面に出さずに開く(検証用。利用者の操作を邪魔しない)
+ *  ytm-lite.exe <file.m3u>          M3U のプレイリストを並べる(動いていればそちらに渡す)
  *
  *  画面を出さずに確かめる入口(結果は標準出力に UTF-8 で。bash なら | cat で読む):
  *  ytm-lite.exe -selftest                   通信しない検査
@@ -41,6 +42,19 @@ static BOOL has_arg(int argc, WCHAR **argv, const WCHAR *name)
     int i;
     for (i = 1; i < argc; i++)
         if (!_wcsicmp(argv[i], name)) return TRUE;
+    return FALSE;
+}
+
+/* 「-」で始まらない最初の引数(-ini の値は除く)を、開く M3U とする。
+   動いている ytm-lite に渡すこともあるので、ここで絶対パスにしておく */
+static BOOL file_arg(int argc, WCHAR **argv, WCHAR *out, DWORD cap)
+{
+    int i;
+    for (i = 1; i < argc; i++) {
+        if (!_wcsicmp(argv[i], L"-ini")) { i++; continue; }
+        if (argv[i][0] == L'-') continue;
+        return GetFullPathNameW(argv[i], cap, out, NULL) > 0;
+    }
     return FALSE;
 }
 
@@ -89,6 +103,7 @@ static void selftest(void)
 
     CHECK(yt_selftest_jar() == 0, "guest cookie jar: add, update, delete");
     CHECK(yt_selftest_setcookie() == 0, "set-cookie: deletion and login cookie names");
+    CHECK(m3u_selftest() == 0, "m3u: urls, ids, #EXTINF names, duplicates, UTF-8 / Shift_JIS");
 
     Sha1Hex("abc", h);
     CHECK(!strcmp(h, "a9993e364706816aba3e25717850c26c9cd0d89d"), "sha1: abc");
@@ -349,7 +364,11 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, LPWSTR cmd, int show)
     if (argv && cli_main(argc, argv)) { LocalFree(argv); return g_fail ? 1 : 0; }
     cfg_init_path(argv ? arg_after(argc, argv, L"-ini") : NULL);
     cfg_load();
-    rc = ui_run(inst, argv && has_arg(argc, argv, L"-mute"), argv && has_arg(argc, argv, L"-noactivate"));
+    {
+        WCHAR m3u[MAX_PATH];
+        BOOL  open = argv && file_arg(argc, argv, m3u, MAX_PATH);
+        rc = ui_run(inst, argv && has_arg(argc, argv, L"-mute"), argv && has_arg(argc, argv, L"-noactivate"), open ? m3u : NULL);
+    }
     if (argv) LocalFree(argv);
     return rc;
 }
