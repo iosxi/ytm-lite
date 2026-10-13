@@ -261,7 +261,7 @@ static BOOL tracks_overlay(WCHAR *buf, size_t cap, BOOL *err)
         if (g_entN) wcscpy_s(buf, cap, L"左のプレイリストを選んでください");
         else if (g_libErr[0]) { _snwprintf(buf, cap, L"ライブラリを読めませんでした\r\n%s", g_libErr); buf[cap - 1] = 0; *err = TRUE; }
         else if (g_cfg.cookie) wcscpy_s(buf, cap, L"ライブラリを読み込み中…");
-        else wcscpy_s(buf, cap, L"右下の … →「ログイン情報を設定…」で Firefox から読み込むと、\r\n自分のプレイリストがここに出ます");
+        else wcscpy_s(buf, cap, L"右下の … →「ログイン情報を設定…」の手順で設定すると、\r\n自分のプレイリストがここに出ます");
         return TRUE;
     }
     {
@@ -742,11 +742,10 @@ static void draw_button(DRAWITEMSTRUCT *di)
 /*  ダイアログ                                                          */
 /* ------------------------------------------------------------------ */
 
-/* 2026-10-13: 遠隔の利用者の Firefox が 2 日続けてログオフされた。ふだん使いの Firefox と
-   同じセッションを ytm-lite が使っていたのが原因と見ている(推測。DEVELOPMENT.md)。そのため注意書きを付ける */
+/* 手順だけを書く。理由(ふだん使いの Firefox がログオフされうる)は README に置く */
 static const WCHAR FF_HELP[] =
-    L"Firefox でログインしていれば、ボタンひとつで読み込めます。ただし、その Firefox で YouTube を"
-    L"使い続けると、その Firefox がログオフされることがあります。ytm-lite 専用の Firefox で使ってください。";
+    L"ytm-lite 専用の Firefox で music.youtube.com にログインしてから、[Firefox から読み込む] を押す。"
+    L"見つからないと出たら、[参照…] で Firefox Portable のフォルダを選んでから押す。";
 
 /* フォルダを選ぶ(Portable 版のフォルダやプロファイル) */
 static BOOL pick_folder(HWND owner, WCHAR *out, size_t cap)
@@ -863,7 +862,7 @@ static INT_PTR CALLBACK login_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
         break;
     case WM_CTLCOLORSTATIC: {
         int id = GetDlgCtrlID((HWND)lp);
-        LRESULT r = theme_ctlcolor(msg, (HDC)wp, (HWND)lp, id == IDC_H1_NOTE || id == IDC_COPY_NOTE || id == IDC_STEP8_NOTE);
+        LRESULT r = theme_ctlcolor(msg, (HDC)wp, (HWND)lp, id == IDC_COPY_NOTE);
         if (id == IDC_URL_LINK) SetTextColor((HDC)wp, theme_is_dark() ? RGB(110, 170, 255) : RGB(0, 102, 204));
         return r;
     }

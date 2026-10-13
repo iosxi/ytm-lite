@@ -6,8 +6,8 @@ IDI_APP ICON "ytm-lite.ico"
 1 RT_MANIFEST "ytm-lite.manifest"
 
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION     10,0,0,0
-PRODUCTVERSION  10,0,0,0
+FILEVERSION     11,0,0,0
+PRODUCTVERSION  11,0,0,0
 FILEFLAGSMASK   0x3fL
 FILEFLAGS       0x0L
 FILEOS          VOS_NT_WINDOWS32
@@ -19,11 +19,11 @@ BEGIN
         BLOCK "041104b0"
         BEGIN
             VALUE "FileDescription",  "ytm-lite - YouTube Music のプレイリストを再生するだけの軽いアプリ"
-            VALUE "FileVersion",      "10"
+            VALUE "FileVersion",      "11"
             VALUE "InternalName",     "ytm-lite"
             VALUE "OriginalFilename", "ytm-lite.exe"
             VALUE "ProductName",      "ytm-lite"
-            VALUE "ProductVersion",   "10"
+            VALUE "ProductVersion",   "11"
         END
     END
     BLOCK "VarFileInfo"
@@ -35,40 +35,38 @@ END
 /* 前半: 手動で貼り付ける(おすすめ)。手順は 1 行に 1 つ、(6) の入力欄と (7) の [保存] を手順の中に置く。
    後半: Firefox から自動で読み込む(同じ Firefox を使い続けるとログオフされうるので注意書き付き)。
    2026-10-13 本人の指摘で組み直した */
-IDD_LOGIN DIALOGEX 0, 0, 340, 352
+IDD_LOGIN DIALOGEX 0, 0, 340, 327
 STYLE DS_CENTER | DS_SHELLFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "ログイン情報の設定"
 FONT 9, "Yu Gothic UI", 400, 0, 0x80
 BEGIN
     LTEXT           "手動で貼り付ける（おすすめ）", IDC_H1, 10, 8, 320, 11
-    LTEXT           "ytm-lite 専用のログインを作るので、ふだん使っているブラウザには影響しません。", IDC_H1_NOTE, 10, 21, 320, 10
 
-    LTEXT           "(1)  ブラウザを、シークレット モード（InPrivate）で開く", -1, 16, 37, 314, 10
-    LTEXT           "(2)  次のページを開いて、ログインする", -1, 16, 51, 314, 10
-    LTEXT           "https://music.youtube.com/", IDC_URL_LINK, 34, 63, 112, 10, SS_NOTIFY
-    LTEXT           "（クリックでコピー）", IDC_COPY_NOTE, 150, 63, 120, 10
-    LTEXT           "(3)  F12 キーで、開発者ツール（DevTools / ウェブ開発ツール）を開く", -1, 16, 78, 314, 10
-    LTEXT           "(4)  「ネットワーク」タブを開く（何も出ていなければ F5 キーで再読み込み）", -1, 16, 92, 314, 10
-    LTEXT           "(5)  一番上の行（music.youtube.com）を右クリックして、", -1, 16, 106, 314, 10
-    LTEXT           "Chrome / Edge", -1, 34, 119, 56, 10
-    LTEXT           "「コピー」→「cURL としてコピー（bash）」", -1, 94, 119, 236, 10
-    LTEXT           "Firefox", -1, 34, 131, 56, 10
-    LTEXT           "「値をコピー」→「要求ヘッダー（リクエストヘッダー）をコピー」", -1, 94, 131, 236, 10
-    LTEXT           "(6)  コピーしたものを、ここに貼り付ける", -1, 16, 146, 314, 10
-    EDITTEXT        IDC_AUTH_TEXT, 34, 158, 296, 42, ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN | WS_VSCROLL | WS_TABSTOP
-    LTEXT           "(7)", IDC_STEP7, 16, 209, 14, 10
-    PUSHBUTTON      "保存", IDOK, 34, 206, 60, 15, WS_TABSTOP
-    LTEXT           "(8)  最後に、シークレット ウィンドウを必ず閉じる", -1, 16, 228, 314, 10
-    LTEXT           "閉じると、このログインは ytm-lite だけが使うものになり、ブラウザに書き換えられません。", IDC_STEP8_NOTE, 34, 240, 296, 10
+    LTEXT           "(1)  ブラウザを、シークレット モード（InPrivate）で開く", -1, 16, 24, 314, 10
+    LTEXT           "(2)  次のページを開いて、ログインする", -1, 16, 38, 314, 10
+    LTEXT           "https://music.youtube.com/", IDC_URL_LINK, 34, 50, 112, 10, SS_NOTIFY
+    LTEXT           "（クリックでコピー）", IDC_COPY_NOTE, 150, 50, 120, 10
+    LTEXT           "(3)  F12 キーを押して、開発者ツールを開く", -1, 16, 65, 314, 10
+    LTEXT           "(4)  「ネットワーク」タブを開いて、F5 キーを押す", -1, 16, 79, 314, 10
+    LTEXT           "(5)  一番上の行（music.youtube.com）を右クリックして、", -1, 16, 93, 314, 10
+    LTEXT           "Chrome / Edge", -1, 34, 106, 56, 10
+    LTEXT           "「コピー」→「cURL としてコピー（bash）」", -1, 94, 106, 236, 10
+    LTEXT           "Firefox", -1, 34, 118, 56, 10
+    LTEXT           "「値をコピー」→「要求ヘッダー（リクエストヘッダー）をコピー」", -1, 94, 118, 236, 10
+    LTEXT           "(6)  コピーしたものを、ここに貼り付ける", -1, 16, 133, 314, 10
+    EDITTEXT        IDC_AUTH_TEXT, 34, 145, 296, 42, ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "(7)", IDC_STEP7, 16, 196, 14, 10
+    PUSHBUTTON      "保存", IDOK, 34, 193, 60, 15, WS_TABSTOP
+    LTEXT           "(8)  シークレット ウィンドウを必ず閉じる", -1, 16, 215, 314, 10
 
-    LTEXT           "Firefox から自動で読み込む", IDC_H2, 10, 261, 320, 11
-    LTEXT           "", IDC_FF_HELP, 10, 274, 320, 20
-    EDITTEXT        IDC_FF_PATH, 10, 297, 252, 14, ES_AUTOHSCROLL | WS_TABSTOP
-    PUSHBUTTON      "参照…", IDC_FF_BROWSE, 266, 297, 64, 14, WS_TABSTOP
-    PUSHBUTTON      "Firefox から読み込む", IDC_FF_BTN, 10, 316, 100, 15, WS_TABSTOP
-    PUSHBUTTON      "music.youtube.com を開く", IDC_FF_OPEN, 116, 316, 110, 15, WS_TABSTOP
-    LTEXT           "", IDC_FF_STATUS, 10, 336, 254, 10
-    PUSHBUTTON      "閉じる", IDCANCEL, 270, 332, 60, 15, WS_TABSTOP
+    LTEXT           "Firefox から自動で読み込む", IDC_H2, 10, 236, 320, 11
+    LTEXT           "", IDC_FF_HELP, 10, 249, 320, 20
+    EDITTEXT        IDC_FF_PATH, 10, 272, 252, 14, ES_AUTOHSCROLL | WS_TABSTOP
+    PUSHBUTTON      "参照…", IDC_FF_BROWSE, 266, 272, 64, 14, WS_TABSTOP
+    PUSHBUTTON      "Firefox から読み込む", IDC_FF_BTN, 10, 291, 100, 15, WS_TABSTOP
+    PUSHBUTTON      "music.youtube.com を開く", IDC_FF_OPEN, 116, 291, 110, 15, WS_TABSTOP
+    LTEXT           "", IDC_FF_STATUS, 10, 311, 254, 10
+    PUSHBUTTON      "閉じる", IDCANCEL, 270, 307, 60, 15, WS_TABSTOP
 END
 
 IDD_OPENURL DIALOGEX 0, 0, 300, 88
