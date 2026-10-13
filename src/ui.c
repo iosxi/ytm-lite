@@ -172,6 +172,25 @@ static Track *cur_track(void)
     return &g_playTL->t.v[g_order[g_pos]];
 }
 
+/* 再生中の曲を、曲の一覧のなるべく真ん中に出す(見ているのが再生中のプレイリストのときだけ)。
+   次へ・前へ・自動で次の曲に進んだとき、画面の外の曲が鳴っていることがないように(本人の要望) */
+static BOOL g_pickedInList;     /* 一覧で選んで再生した(その曲は見えているので動かさない) */
+
+static void center_current(void)
+{
+    int  row, per, top, rowH, want;
+    RECT r;
+    if (!g_viewTL || g_viewTL != g_playTL || g_pos < 0 || g_pos >= g_orderN) return;
+    row = g_order[g_pos];
+    per = ListView_GetCountPerPage(g_tracks);
+    top = ListView_GetTopIndex(g_tracks);
+    if (!ListView_GetItemRect(g_tracks, top, &r, LVIR_BOUNDS)) return;
+    rowH = r.bottom - r.top;
+    want = row - per / 2;
+    if (want < 0) want = 0;                         /* 下の端は ListView が止める */
+    if (want != top && rowH > 0) ListView_Scroll(g_tracks, 0, (want - top) * rowH);
+}
+
 static void update_title(void)
 {
     Track *t = cur_track();
@@ -334,6 +353,7 @@ static void show_view(int i)
         ListView_EnsureVisible(g_pls, i, FALSE);
     }
     ListView_SetItemCountEx(g_tracks, g_viewTL ? g_viewTL->t.n : 0, 0);
+    center_current();                   /* 再生中のプレイリストに戻ったら、鳴っている曲を見せる */
     InvalidateRect(g_tracks, NULL, TRUE);
 }
 
@@ -402,6 +422,7 @@ static int next_playable(int from, int dir, BOOL wrap)
 static void stop_playback(const WCHAR *msg, BOOL err)
 {
     g_gen++;
+    art_set(NULL, 0);
     g_loadingAudio = FALSE;
     worker_cancel_audio();
     player_stop();
@@ -423,11 +444,13 @@ static void start_track(BOOL user)
     g_gen++;
     KillTimer(g_wnd, TIMER_SKIP);
     KillTimer(g_wnd, TIMER_FETCH);
+    art_set(NULL, 0);                   /* 新しい画像が届くまでは空(前の曲の絵は紛らわしい。本人の指定) */
     smtc_track(t->title, t->artist, t->album);
     /* ジャケット画像はこちらで取って、バイト列で渡す。URL のまま渡す方式(CreateFromUri)は
        Windows の通信部品が 12 個読み込まれ、Working Set が 7MB 増えたのでやめた(2026-10-13 実測) */
     if (g_cfg.thumbnail && t->thumb) worker_thumb(t->thumb, g_gen);   /* 届いたら WM_APP_THUMB */
     update_title();
+    if (!g_pickedInList) center_current();
     if (g_prefVid[0] && !strcmp(g_prefVid, t->vid) && g_pref.h) {
         player_open(&g_pref, g_gen);          /* 先読み済み: すぐ鳴らす */
         g_prefVid[0] = 0;
@@ -507,7 +530,9 @@ static void toggle_play(void)
     if (cur_track()) { start_track(TRUE); return; }
     if (g_viewTL && g_viewTL->t.n) {
         int sel = ListView_GetNextItem(g_tracks, -1, LVNI_SELECTED);
+        g_pickedInList = sel >= 0;              /* 一覧で選んだ曲から: 一覧は動かさない */
         play_from(g_viewTL, sel >= 0 ? sel : (g_cfg.shuffle ? -1 : 0));
+        g_pickedInList = FALSE;
     }
 }
 
@@ -636,6 +661,7 @@ static void layout(void)
         ListView_SetColumnWidth(g_tracks, 4, dur);
         ListView_SetColumnWidth(g_pls, 0, L.leftW - GetSystemMetricsForDpi(SM_CXVSCROLL, g_dpi));
     }
+    art_refresh(FALSE);                 /* 一覧の大きさが変わったら、背景の絵も合わせる */
     InvalidateRect(g_wnd, NULL, FALSE);
 }
 
@@ -1238,7 +1264,10 @@ static void tracks_dispinfo(NMLVDISPINFOW *di)
 
 static LRESULT tracks_customdraw(NMLVCUSTOMDRAW *cd)
 {
-    if (cd->nmcd.dwDrawStage == CDDS_PREPAINT) return CDRF_NOTIFYITEMDRAW;
+    if (cd->nmcd.dwDrawStage == CDDS_PREPAINT) {
+        art_paint(cd->nmcd.hdc);        /* 再生中の曲のジャケット画像を、行より先に(= 字の後ろに) */
+        return CDRF_NOTIFYITEMDRAW;
+    }
     if (cd->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) {
         int i = (int)cd->nmcd.dwItemSpec;
         if (g_viewTL && i >= 0 && i < g_viewTL->t.n) {
@@ -1519,6 +1548,7 @@ static void create_children(void)
     g_seek = make_slider(IDC_SEEK, SLS_SEEK, 1, 0);
     g_vol = make_slider(IDC_VOL, SLS_VOLUME, 100, g_cfg.volume);
     SetWindowSubclass(g_tracks, tracks_subclass, 2, 0);    /* 空のときに「読み込み中…」などを出す */
+    art_init(g_tracks);
 }
 
 static void apply_fonts(void)
@@ -1530,6 +1560,8 @@ static void apply_fonts(void)
 static void apply_theme(void)
 {
     theme_apply_window(g_wnd);
+    ListView_SetTextBkColor(g_tracks, CLR_NONE);   /* 背景に敷いたジャケット画像を字の後ろにも見せる */
+    art_refresh(TRUE);
     InvalidateRect(g_wnd, NULL, TRUE);
 }
 
@@ -1614,7 +1646,11 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             if (n->code == LVN_ITEMACTIVATE) {
                 int i = ((NMITEMACTIVATE *)lp)->iItem;
                 if (i < 0) i = ListView_GetNextItem(g_tracks, -1, LVNI_SELECTED);
-                if (i >= 0) play_from(g_viewTL, i);
+                if (i >= 0) {
+                    g_pickedInList = TRUE;      /* 自分で選んだ曲: 一覧は動かさない */
+                    play_from(g_viewTL, i);
+                    g_pickedInList = FALSE;
+                }
                 return 0;
             }
         } else if (n->hwndFrom == g_pls) {
@@ -1712,7 +1748,10 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     }
     case WM_APP_THUMB: {
         ThumbResult *r = (ThumbResult *)lp;
-        if (r->gen == g_gen) smtc_thumbnail((const BYTE *)r->data.p, (DWORD)r->data.n);   /* 古い曲の画像は捨てる */
+        if (r->gen == g_gen) {                  /* 古い曲の画像は捨てる */
+            smtc_thumbnail((const BYTE *)r->data.p, (DWORD)r->data.n);
+            art_set((const BYTE *)r->data.p, r->data.n);
+        }
         BufFree(&r->data);
         free(r);
         return 0;
@@ -1870,6 +1909,17 @@ int ui_run(HINSTANCE inst, BOOL mute, BOOL noActivate, const WCHAR *openM3u)
     }
     if (openM3u && *openM3u) add_m3u(openM3u, TRUE);
     else if (g_cfg.m3u[0]) add_m3u(g_cfg.m3u, FALSE);
+    if (g_artTest) {
+        /* 検証用: 再生しなくても、この画像を背景に敷く(通信せずに濃さを確かめるため) */
+        HANDLE f = CreateFileW(g_artTest, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+        if (f != INVALID_HANDLE_VALUE) {
+            DWORD n = GetFileSize(f, NULL), got = 0;
+            BYTE *b = n && n < 8 * 1024 * 1024 ? (BYTE *)malloc(n) : NULL;
+            if (b && ReadFile(f, b, n, &got, NULL)) art_set(b, got);
+            free(b);
+            CloseHandle(f);
+        }
+    }
 
     while (GetMessageW(&m, NULL, 0, 0) > 0) {
         if (m.message == WM_KEYDOWN && (m.hwnd == g_wnd || GetParent(m.hwnd) == g_wnd)) {

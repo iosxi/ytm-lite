@@ -6,6 +6,7 @@
  *  ytm-lite.exe -mute               音量 0 で鳴らす(検証用。処理は同じ)
  *  ytm-lite.exe -noactivate         窓を前面に出さずに開く(検証用。利用者の操作を邪魔しない)
  *  ytm-lite.exe <file.m3u>          M3U のプレイリストを並べる(動いていればそちらに渡す)
+ *  ytm-lite.exe -art <jpg>          その画像を曲の一覧の背景に敷く(検証用。通信せずに濃さを見る)
  *
  *  画面を出さずに確かめる入口(結果は標準出力に UTF-8 で。bash なら | cat で読む):
  *  ytm-lite.exe -selftest                   通信しない検査
@@ -45,13 +46,15 @@ static BOOL has_arg(int argc, WCHAR **argv, const WCHAR *name)
     return FALSE;
 }
 
-/* 「-」で始まらない最初の引数(-ini の値は除く)を、開く M3U とする。
+const WCHAR *g_artTest;
+
+/* 「-」で始まらない最初の引数(-ini と -art の値は除く)を、開く M3U とする。
    動いている ytm-lite に渡すこともあるので、ここで絶対パスにしておく */
 static BOOL file_arg(int argc, WCHAR **argv, WCHAR *out, DWORD cap)
 {
     int i;
     for (i = 1; i < argc; i++) {
-        if (!_wcsicmp(argv[i], L"-ini")) { i++; continue; }
+        if (!_wcsicmp(argv[i], L"-ini") || !_wcsicmp(argv[i], L"-art")) { i++; continue; }
         if (argv[i][0] == L'-') continue;
         return GetFullPathNameW(argv[i], cap, out, NULL) > 0;
     }
@@ -367,6 +370,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, LPWSTR cmd, int show)
     {
         WCHAR m3u[MAX_PATH];
         BOOL  open = argv && file_arg(argc, argv, m3u, MAX_PATH);
+        if (argv) g_artTest = arg_after(argc, argv, L"-art");
         rc = ui_run(inst, argv && has_arg(argc, argv, L"-mute"), argv && has_arg(argc, argv, L"-noactivate"), open ? m3u : NULL);
     }
     if (argv) LocalFree(argv);

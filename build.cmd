@@ -15,7 +15,7 @@ call "%VSDIR%\VC\Auxiliary\Build\vcvars64.bat" >nul 2>nul || exit /b 1
 :build
 if not exist build\obj mkdir build\obj
 rc /nologo /fo build\obj\ytm-lite.res src\ytm-lite.rc || exit /b 1
-set "SRC=src\main.c src\ui.c src\slider.c src\smtc.c src\ffcookie.c src\m3u.c src\worker.c src\yt.c src\player.c src\net.c src\json.c src\config.c src\theme.c src\util.c"
+set "SRC=src\main.c src\ui.c src\slider.c src\smtc.c src\ffcookie.c src\m3u.c src\art.c src\worker.c src\yt.c src\player.c src\net.c src\json.c src\config.c src\theme.c src\util.c"
 set "LIBS=user32.lib gdi32.lib comctl32.lib shell32.lib ole32.lib advapi32.lib"
 set "CFLAGS=/nologo /utf-8 /W4 /MT /DUNICODE /D_UNICODE /D_CRT_SECURE_NO_WARNINGS /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00"
 if /i "%~1"=="debug" goto debug

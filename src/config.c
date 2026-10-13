@@ -134,6 +134,11 @@ void cfg_load(void)
     g_cfg.thumbSize = get_int(L"thumbnail_size", 544);
     if (g_cfg.thumbSize < 60) g_cfg.thumbSize = 60;
     if (g_cfg.thumbSize > 1200) g_cfg.thumbSize = 1200;
+    /* 13%: 絵の一番明るい所(ダーク)・一番暗い所(ライト)に乗っても、灰色の字(再生できない曲)が
+       コントラスト比 4.5:1 を保てる上限(ダーク 13.9%、ライト 14.5%)の内側。2026-10-13 */
+    g_cfg.artOpacity = get_int(L"art_opacity", 13);
+    if (g_cfg.artOpacity < 0) g_cfg.artOpacity = 0;
+    if (g_cfg.artOpacity > 100) g_cfg.artOpacity = 100;
     g_cfg.debug     = get_int(L"debug", 0);
     get_str(L"authuser", g_cfg.authuser, sizeof(g_cfg.authuser));
     get_str(L"ua", g_cfg.ua, sizeof(g_cfg.ua));
