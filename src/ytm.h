@@ -22,7 +22,7 @@
 #include <wchar.h>
 
 #define APP_NAME     L"ytm-lite"
-#define APP_VERSION  "14"            /* .rc の VERSIONINFO と .manifest も合わせて上げる */
+#define APP_VERSION  "15"            /* .rc の VERSIONINFO と .manifest も合わせて上げる */
 
 /* 画面のスレッドへ届ける通知 */
 #define WM_APP_LIBRARY   (WM_APP + 1)   /* lParam = LibResult*  */
@@ -146,7 +146,8 @@ int   ff_candidates(WCHAR (*list)[MAX_PATH], int max);
 void  art_init(HWND list);
 void  art_set(const BYTE *jpeg, size_t n);     /* いまの曲の画像。NULL で消す */
 void  art_refresh(BOOL force);                 /* 大きさ・テーマが変わったら作り直す */
-void  art_paint(HDC dc);                       /* 曲の一覧のカスタム描画(CDDS_PREPAINT)から */
+void  art_paint(HDC dc, const RECT *clip);     /* 曲の一覧のカスタム描画から(clip の範囲だけ貼る) */
+BOOL  art_shown(void);
 extern const WCHAR *g_artTest;                 /* -art <jpg>(検証用): 再生しなくてもこの画像を敷く */
 
 /* ---------------------------------------------------------------- m3u.c */

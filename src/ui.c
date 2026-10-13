@@ -1265,11 +1265,31 @@ static void tracks_dispinfo(NMLVDISPINFOW *di)
 static LRESULT tracks_customdraw(NMLVCUSTOMDRAW *cd)
 {
     if (cd->nmcd.dwDrawStage == CDDS_PREPAINT) {
-        art_paint(cd->nmcd.hdc);        /* 再生中の曲のジャケット画像を、行より先に(= 字の後ろに) */
+        /* 再生中の曲のジャケット画像: ここでは行の無い所(最後の行より下、列より右)だけ。
+           行の所は、その行を描く直前に貼る(下の CDDS_ITEMPREPAINT)。字が絵に隠れないように(art_paint の説明) */
+        if (art_shown()) {
+            RECT cl, last, r;
+            int  n = ListView_GetItemCount(g_tracks);
+            GetClientRect(g_tracks, &cl);
+            if (n > 0) {
+                int idx = min(ListView_GetTopIndex(g_tracks) + ListView_GetCountPerPage(g_tracks), n - 1);
+                if (ListView_GetItemRect(g_tracks, idx, &last, LVIR_BOUNDS)) {
+                    r = cl; r.top = last.bottom;
+                    art_paint(cd->nmcd.hdc, &r);
+                    r = cl; r.left = last.right; r.bottom = last.bottom;
+                    art_paint(cd->nmcd.hdc, &r);
+                }
+            } else {
+                art_paint(cd->nmcd.hdc, &cl);
+            }
+        }
         return CDRF_NOTIFYITEMDRAW;
     }
     if (cd->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) {
-        int i = (int)cd->nmcd.dwItemSpec;
+        int  i = (int)cd->nmcd.dwItemSpec;
+        RECT row;
+        if (art_shown() && ListView_GetItemRect(g_tracks, i, &row, LVIR_BOUNDS))
+            art_paint(cd->nmcd.hdc, &row);      /* この行の範囲の絵を、行の字より先に */
         if (g_viewTL && i >= 0 && i < g_viewTL->t.n) {
             Track *t = &g_viewTL->t.v[i];
             if (g_viewTL == g_playTL && cur_track() == t) cd->clrText = theme_accent();
@@ -1643,6 +1663,12 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         if (n->hwndFrom == g_tracks) {
             if (n->code == LVN_GETDISPINFOW) { tracks_dispinfo((NMLVDISPINFOW *)lp); return 0; }
             if (n->code == NM_CUSTOMDRAW) return tracks_customdraw((NMLVCUSTOMDRAW *)lp);
+            if (n->code == LVN_ENDSCROLL && art_shown()) {
+                /* なめらかなスクロールは画面をずらしてコピーするので、表示に固定した背景の絵がずれて残る。
+                   止まったら全体を描き直す */
+                InvalidateRect(g_tracks, NULL, FALSE);
+                return 0;
+            }
             if (n->code == LVN_ITEMACTIVATE) {
                 int i = ((NMITEMACTIVATE *)lp)->iItem;
                 if (i < 0) i = ListView_GetNextItem(g_tracks, -1, LVNI_SELECTED);

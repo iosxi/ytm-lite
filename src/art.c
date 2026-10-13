@@ -18,6 +18,9 @@
 
 #pragma comment(lib, "windowscodecs.lib")
 
+#define ART_MAX_Y_DARK   89     /* ダーク: 絵の明るさの上限(背景 32) */
+#define ART_MIN_Y_LIGHT  178    /* ライト: 絵の明るさの下限(背景 255) */
+
 static HWND     g_list;
 static BYTE    *g_jpeg;          /* いまの曲の画像(無ければ NULL) */
 static size_t   g_jpegN;
@@ -49,9 +52,8 @@ static HBITMAP make_bitmap(const BYTE *data, size_t n, int side, COLORREF bg, in
         FAILED(IWICBitmapDecoder_GetFrame(dec, 0, &fr)) ||
         FAILED(IWICBitmapFrameDecode_GetSize(fr, &w, &h)) || !w || !h)
         goto done;
-    /* 元より大きくはしない(ぼやけるうえ、メモリを食う。1600x1000 の窓で 640px に広げると +1.5MB だった) */
-    if (side > (int)max(w, h)) side = (int)max(w, h);
-    /* 縦横比を保って一辺 side に収める */
+    /* 縦横比を保って一辺 side に収める。元(既定 544px)より大きい窓では引き伸ばす
+       (本人の指定「可能な限り最大化」。薄く敷くので粗さは目立たない) */
     if (w >= h) { dw = side; dh = (int)((LONGLONG)side * h / w); }
     else        { dh = side; dw = (int)((LONGLONG)side * w / h); }
     if (dw < 1 || dh < 1) goto done;
@@ -76,13 +78,32 @@ static HBITMAP make_bitmap(const BYTE *data, size_t n, int side, COLORREF bg, in
         hb = NULL;
         goto done;
     }
-    /* 背景色に alpha で重ねた色にする(背景は単色なので、これで半透過と同じ見た目になる) */
-    for (i = 0; i < dw * dh; i++) {
-        BYTE *p = bits + i * 4;
-        p[0] = (BYTE)(bb  + (p[0] - bb)  * alpha / 255);
-        p[1] = (BYTE)(bgc + (p[1] - bgc) * alpha / 255);
-        p[2] = (BYTE)(br  + (p[2] - br)  * alpha / 255);
-        p[3] = 0;
+    /* 背景色に alpha で重ねた色にする(背景は単色なので、これで半透過と同じ見た目になる)。
+       そのうえで明るさ(Y)に上限(ダーク)・下限(ライト)を設け、超えた画素は色味を保ったまま背景色の側へ寄せる。
+       濃くしても、絵の明るい所(ダーク)・暗い所(ライト)で字が沈まないように。限度は灰色の字
+       (再生できない曲。ダーク 170、ライト 96)がコントラスト比 3:1 を保てる明るさ(ダーク 89、ライト 178) */
+    {
+        int bgY = (54 * br + 183 * bgc + 19 * bb) >> 8;
+        BOOL dark = bgY < 128;
+        int  lim = dark ? ART_MAX_Y_DARK : ART_MIN_Y_LIGHT;
+        for (i = 0; i < dw * dh; i++) {
+            BYTE *p = bits + i * 4;
+            int   b = bb  + (p[0] - bb)  * alpha / 255;
+            int   g = bgc + (p[1] - bgc) * alpha / 255;
+            int   r = br  + (p[2] - br)  * alpha / 255;
+            int   y = (54 * r + 183 * g + 19 * b) >> 8;
+            if ((dark && y > lim) || (!dark && y < lim)) {
+                /* 背景色からの差を (lim - bgY) / (y - bgY) 倍に縮める */
+                int num = lim - bgY, den = y - bgY;
+                b = bb  + (b - bb)  * num / den;
+                g = bgc + (g - bgc) * num / den;
+                r = br  + (r - br)  * num / den;
+            }
+            p[0] = (BYTE)b;
+            p[1] = (BYTE)g;
+            p[2] = (BYTE)r;
+            p[3] = 0;
+        }
     }
 
 done:
@@ -136,7 +157,7 @@ void art_refresh(BOOL force)
         return;
     }
     list_area(&rc);
-    side = min(rc.right - rc.left, rc.bottom - rc.top) * 3 / 4;     /* 短い辺の 3/4 */
+    side = min(rc.right - rc.left, rc.bottom - rc.top);             /* 短い辺いっぱい(本人の指定「可能な限り最大化」) */
     if (side < 16) return;
     bg = theme_ctrl_back();
     alpha = g_cfg.artOpacity * 255 / 100;
@@ -154,24 +175,38 @@ void art_refresh(BOOL force)
     InvalidateRect(g_list, NULL, TRUE);
 }
 
-/* 曲の一覧が描く最初(カスタム描画の CDDS_PREPAINT。背景を塗った後、行を描く前)に呼ぶ。
-   見えている範囲の中央に貼るので、スクロールしても絵は動かない。
-   ListView 自身の背景画像(LVM_SETBKIMAGE)は中身と一緒にスクロールしてしまい、
-   自動スクロールで絵が画面の外へ出た(2026-10-13 実測)のでやめた */
-void art_paint(HDC dc)
+/* 絵のうち、clip(一覧のクライアント座標)に重なる部分だけを貼る。
+   一覧のカスタム描画から、行を描く直前(CDDS_ITEMPREPAINT)にその行の範囲を、描き始め(CDDS_PREPAINT)に
+   行の無い下の空きを渡す。こうすると、絵を貼った範囲には必ずすぐ後で字が描かれ、字が絵の下に隠れない。
+   (v14 は描き始めに絵を丸ごと貼っていたため、マウスを乗せた・スクロールしたときなど一部の行だけを
+   描き直す経路で、ほかの行の字が絵に隠れた。2026-10-13 本人の報告)
+   見えている範囲の中央に貼るので、スクロールしても絵は動かない。ListView 自身の背景画像(LVM_SETBKIMAGE)は
+   中身と一緒にスクロールしてしまい、自動スクロールで絵が画面の外へ出た(2026-10-13 実測)のでやめた */
+void art_paint(HDC dc, const RECT *clip)
 {
-    RECT rc;
-    HDC  mem;
+    RECT    rc, art, part;
+    HDC     mem;
     HGDIOBJ old;
     if (!g_hbm) return;
     list_area(&rc);
+    art.left = rc.left + (rc.right - rc.left - g_bmW) / 2;
+    art.top = rc.top + (rc.bottom - rc.top - g_bmH) / 2;
+    art.right = art.left + g_bmW;
+    art.bottom = art.top + g_bmH;
+    if (!IntersectRect(&part, &art, clip)) return;
+    if (!IntersectRect(&part, &part, &rc)) return;          /* 見出しの上には出さない */
     mem = CreateCompatibleDC(dc);
     if (!mem) return;
     old = SelectObject(mem, g_hbm);
-    BitBlt(dc, rc.left + (rc.right - rc.left - g_bmW) / 2, rc.top + (rc.bottom - rc.top - g_bmH) / 2,
-           g_bmW, g_bmH, mem, 0, 0, SRCCOPY);
+    BitBlt(dc, part.left, part.top, part.right - part.left, part.bottom - part.top,
+           mem, part.left - art.left, part.top - art.top, SRCCOPY);
     SelectObject(mem, old);
     DeleteDC(mem);
+}
+
+BOOL art_shown(void)
+{
+    return g_hbm != NULL;
 }
 
 /* 新しい曲の画像(NULL で消す) */
