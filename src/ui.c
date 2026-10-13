@@ -159,6 +159,7 @@ typedef struct {
     RECT art;                   /* ジャケット画像(正方形) */
     RECT title, sub;            /* 曲名(2 行まで)、アーティスト・アルバムか状態(2 行まで) */
     RECT seek, timeL, timeR;    /* シークバーと、その下の時間 */
+    RECT vol, volText, menu;    /* 2 段目: 音量の横棒、音量の数値、… */
     int  row1Y, row2Y;          /* ⏮▶⏭ の段、🔀🔁音量… の段の上端 */
 } Layout;
 
@@ -741,13 +742,21 @@ static void get_layout(Layout *L)
     L->row1Y = y;
     y += S(44) + S(4);
     L->row2Y = y;
+    /* 2 段目: 音量の横棒、その右に音量の数値(本人の指摘「いまどれくらいなのか数値が出ていない」)、右端に … */
+    {
+        int menuX = x1 - S(PAD) + S(4) - S(28);
+        SetRect(&L->menu, menuX, y, menuX + S(28), y + S(28));
+        SetRect(&L->volText, menuX - S(4) - S(30), y, menuX - S(4), y + S(28));
+        SetRect(&L->vol, x0 + S(PAD) - S(6), y + S(4), L->volText.left - S(2), y + S(24));
+        if (L->vol.right - L->vol.left < S(40)) L->vol.right = L->vol.left + S(40);
+    }
 }
 
 static void layout(void)
 {
     Layout L;
     RECT   rc;
-    int    w, h, cx, x, gap, inner, volL, volR;
+    int    w, h, cx, x, gap, inner;
     HDWP   dw;
 
     if (!g_tracks) return;
@@ -773,11 +782,10 @@ static void layout(void)
     x = cx + S(22) + gap;
     dw = DeferWindowPos(dw, g_btn[2], NULL, x, L.row1Y + S(6), S(32), S(32), SWP_NOZORDER | SWP_NOACTIVATE);
     dw = DeferWindowPos(dw, g_btn[4], NULL, x + S(32) + gap, L.row1Y + S(8), S(28), S(28), SWP_NOZORDER | SWP_NOACTIVATE);
-    /* 2 段目: 音量と … */
-    volL = L.mid.left + S(PAD) - S(6);
-    volR = L.mid.right - S(PAD) + S(4) - S(28) - S(6);
-    dw = DeferWindowPos(dw, g_btn[5], NULL, volR + S(6), L.row2Y, S(28), S(28), SWP_NOZORDER | SWP_NOACTIVATE);
-    dw = DeferWindowPos(dw, g_vol, NULL, volL, L.row2Y + S(4), max(volR - volL, S(40)), S(20), SWP_NOZORDER | SWP_NOACTIVATE);
+    /* 2 段目: 音量と(数値は paint で描く) … */
+    dw = DeferWindowPos(dw, g_btn[5], NULL, L.menu.left, L.menu.top, S(28), S(28), SWP_NOZORDER | SWP_NOACTIVATE);
+    dw = DeferWindowPos(dw, g_vol, NULL, L.vol.left, L.vol.top, L.vol.right - L.vol.left, L.vol.bottom - L.vol.top,
+                        SWP_NOZORDER | SWP_NOACTIVATE);
     EndDeferWindowPos(dw);
     InvalidateRect(g_wnd, NULL, FALSE);
 }
@@ -879,6 +887,10 @@ static void paint(HDC hdc)
     DrawTextW(mem, t, -1, &L.timeL, DT_SINGLELINE | DT_TOP | DT_LEFT | DT_NOPREFIX);
     fmt_time(t, ARRAYSIZE(t), tr ? dur : 0);
     DrawTextW(mem, t, -1, &L.timeR, DT_SINGLELINE | DT_TOP | DT_RIGHT | DT_NOPREFIX);
+    /* 音量の数値 */
+    _snwprintf(t, ARRAYSIZE(t), L"%d", g_cfg.volume);
+    t[ARRAYSIZE(t) - 1] = 0;
+    DrawTextW(mem, t, -1, &L.volText, DT_SINGLELINE | DT_VCENTER | DT_RIGHT | DT_NOPREFIX);
 
     SelectObject(mem, oldFont);
     SetViewportOrgEx(mem, 0, 0, NULL);
@@ -2014,8 +2026,11 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 g_smtcDirty = TRUE;
             }
         } else if ((HWND)lp == g_vol) {
+            Layout L;
             g_cfg.volume = (int)SendMessageW(g_vol, SLM_GETPOS, 0, 0);
             player_volume(g_cfg.volume);
+            get_layout(&L);
+            InvalidateRect(h, &L.volText, FALSE);      /* 音量の数値 */
         }
         return 0;
     case WM_COMMAND:

@@ -18,6 +18,7 @@ typedef struct {
     int  style;         /* SLS_SEEK / SLS_VOLUME */
     BOOL active;        /* シーク: 曲がある */
     BOOL drag, hot;
+    int  wheel;         /* ホイールの回した量の端数(WHEEL_DELTA に満たない分) */
 } Slider;
 
 static int dpi_scale(HWND h, int v) { return MulDiv(v, (int)GetDpiForWindow(h), 96); }
@@ -177,17 +178,22 @@ static LRESULT CALLBACK slider_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     case WM_CAPTURECHANGED:
         if (s->drag && (HWND)lp != h) { s->drag = FALSE; notify(h, TB_ENDTRACK); InvalidateRect(h, NULL, FALSE); }
         return 0;
-    case WM_MOUSEWHEEL:
-        if (s->style == SLS_VOLUME) {
-            int step = GET_WHEEL_DELTA_WPARAM(wp) / WHEEL_DELTA * 5;
-            int v = s->pos + step;
-            s->pos = v < 0 ? 0 : v > s->max ? s->max : v;
-            InvalidateRect(h, NULL, FALSE);
-            notify(h, TB_THUMBTRACK);
-            notify(h, TB_ENDTRACK);
-            return 0;
-        }
-        break;
+    case WM_MOUSEWHEEL: {
+        /* 音量は 1 目盛り 5、シークは 1 目盛り 5 秒(本人の要望: シークバーもホイールで前後させる)。
+           細かく回せるホイールは 1 回の値が 120 より小さいので、貯めて 1 目盛り分ごとに動かす */
+        int notches, v;
+        if (s->style == SLS_SEEK && (!s->active || s->drag)) return 0;
+        s->wheel += GET_WHEEL_DELTA_WPARAM(wp);
+        notches = s->wheel / WHEEL_DELTA;
+        s->wheel -= notches * WHEEL_DELTA;
+        if (!notches) return 0;
+        v = s->pos + notches * 5;
+        s->pos = v < 0 ? 0 : v > s->max ? s->max : v;
+        InvalidateRect(h, NULL, FALSE);
+        notify(h, TB_THUMBTRACK);
+        notify(h, TB_ENDTRACK);
+        return 0;
+    }
     }
     return DefWindowProcW(h, msg, wp, lp);
 }
