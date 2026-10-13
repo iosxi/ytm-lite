@@ -88,6 +88,7 @@ static HWND   g_wnd, g_pls, g_tracks, g_seek, g_vol, g_btn[6];
 static UINT   g_dpi = 96;
 static HFONT  g_font, g_fontBold, g_fontTitle, g_fontIcon, g_fontIconBig, g_fontIconArt;
 static HIMAGELIST g_ilTracks, g_ilPls;  /* 行の高さを決めるためだけの空の画像リスト */
+static int    g_split, g_splitX0, g_splitW0; /* 欄の境目をドラッグ中(1 = 左の境目、2 = 右の境目)、始めの位置と幅 */
 static BOOL   g_mute;
 
 static Entry *g_ent;
@@ -346,31 +347,43 @@ static BOOL tracks_overlay(WCHAR *buf, size_t cap, BOOL *err)
 /* 1 列だけの一覧の列幅を、いまの幅にぴったり合わせる。狭いと列の右端に線が出て、広いと横のスクロールバーが出る。
    件数が一画面を超えるのに縦のスクロールバーがまだ無ければ、その幅を先に引く(出たときに一覧へ WM_SIZE が
    来ず、列がはみ出したまま横のスクロールバーが出た。2026-10-13 実測)。大きさか件数が変わったら呼ぶ */
-static void fit_column(HWND h, int count)
+static void fit_column(HWND h, int count, int clientW)
 {
     RECT c;
     int  w;
     BOOL hasV = (GetWindowLongW(h, GWL_STYLE) & WS_VSCROLL) != 0;
     BOOL needV = hasV || count > ListView_GetCountPerPage(h);
-    GetClientRect(h, &c);
-    w = c.right;
+    if (clientW < 0) { GetClientRect(h, &c); clientW = c.right; }
+    w = clientW;
     if (!hasV && needV) w -= GetSystemMetricsForDpi(SM_CXVSCROLL, g_dpi);
     /* 縦のスクロールバーがあると、列の幅が内側の幅と同じでも横のスクロールバーが出た(608 で出て 607 で消えた。
        2026-10-13 実測)。無いときは同じ幅で出なかった */
     if (needV) w -= 1;
     if (w < 0) w = 0;
     if (ListView_GetColumnWidth(h, 0) != w) ListView_SetColumnWidth(h, 0, w);
+    /* 一度付いた横のスクロールバーは、同じ幅を設定し直しても外れない。別の幅を挟むと計算し直して外れた(実測) */
+    if (GetWindowLongW(h, GWL_STYLE) & WS_HSCROLL) {
+        ListView_SetColumnWidth(h, 0, max(w - 1, 0));
+        ListView_SetColumnWidth(h, 0, w);
+    }
 }
 
-/* 件数が変わるときは、一覧がスクロールバーを決める前に、新しい件数で列の幅を合わせておく
-   (後から狭めても、一度付いた横のスクロールバーが外れなかった。2026-10-13 実測) */
+/* 件数・大きさが変わるときは、一覧がスクロールバーを決める前に、新しい件数・幅で列の幅を合わせておく
+   (後から狭めても、一度付いた横のスクロールバーが外れなかった。2026-10-13 実測)。終わってからもう一度 */
+static void fit_column_msg(HWND h, UINT msg, WPARAM wp, LPARAM lp, BOOL after)
+{
+    if (msg == LVM_SETITEMCOUNT && !after) fit_column(h, (int)wp, -1);
+    if (msg == WM_SIZE) fit_column(h, ListView_GetItemCount(h), after ? -1 : (int)LOWORD(lp));
+    if (msg == LVM_SETITEMCOUNT && after) fit_column(h, (int)wp, -1);
+}
+
 static LRESULT CALLBACK pls_subclass(HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR ref)
 {
     LRESULT r;
     (void)id; (void)ref;
-    if (msg == LVM_SETITEMCOUNT) fit_column(h, (int)wp);
+    fit_column_msg(h, msg, wp, lp, FALSE);
     r = DefSubclassProc(h, msg, wp, lp);
-    if (msg == WM_SIZE) fit_column(h, ListView_GetItemCount(h));
+    fit_column_msg(h, msg, wp, lp, TRUE);
     return r;
 }
 
@@ -378,9 +391,9 @@ static LRESULT CALLBACK tracks_subclass(HWND h, UINT msg, WPARAM wp, LPARAM lp, 
 {
     LRESULT r;
     (void)id; (void)ref;
-    if (msg == LVM_SETITEMCOUNT) fit_column(h, (int)wp);
+    fit_column_msg(h, msg, wp, lp, FALSE);
     r = DefSubclassProc(h, msg, wp, lp);
-    if (msg == WM_SIZE) fit_column(h, ListView_GetItemCount(h));
+    fit_column_msg(h, msg, wp, lp, TRUE);
     if (msg == WM_PAINT) {
         WCHAR text[512];
         BOOL  err;
@@ -659,6 +672,28 @@ static void create_fonts(void)
     g_fontIconArt = CreateFontIndirectW(&lf);
 }
 
+#define LEFT_MIN   120              /* 欄の幅の下限・上限(DIP) */
+#define LEFT_MAX   480
+#define MID_MIN    220
+#define MID_MAX    600
+#define RIGHT_MIN  240
+
+/* 左と真ん中の欄の幅(px)。境目をドラッグして決めた幅(g_cfg.paneLeft / paneMid、DIP)があればそれ、
+   無ければ窓の幅に合わせる。窓が狭いときは、曲の一覧が RIGHT_MIN 残るよう真ん中、左の順に削る */
+static void pane_widths(int w, int *leftW, int *midW)
+{
+    int l = g_cfg.paneLeft ? S(g_cfg.paneLeft) : w * 18 / 100;
+    int m = g_cfg.paneMid ? S(g_cfg.paneMid) : w * 28 / 100;
+    if (!g_cfg.paneLeft) l = max(S(150), min(l, S(240)));
+    if (!g_cfg.paneMid) m = max(S(260), min(m, S(380)));
+    l = max(S(LEFT_MIN), min(l, S(LEFT_MAX)));
+    m = max(S(MID_MIN), min(m, S(MID_MAX)));
+    if (l + 1 + m + 1 + S(RIGHT_MIN) > w) m = max(S(MID_MIN), w - l - 2 - S(RIGHT_MIN));
+    if (l + 1 + m + 1 + S(RIGHT_MIN) > w) l = max(S(LEFT_MIN), w - m - 2 - S(RIGHT_MIN));
+    *leftW = l;
+    *midW = m;
+}
+
 static void get_layout(Layout *L)
 {
     RECT rc;
@@ -666,37 +701,32 @@ static void get_layout(Layout *L)
     GetClientRect(g_wnd, &rc);
     w = rc.right;
     h = rc.bottom;
-    /* 左はやや狭く(本人の指定)、真ん中は板の幅を決めて、残りを曲の一覧に */
-    L->leftW = w * 18 / 100;
-    if (L->leftW < S(150)) L->leftW = S(150);
-    if (L->leftW > S(240)) L->leftW = S(240);
-    midW = w * 28 / 100;
-    if (midW < S(260)) midW = S(260);
-    if (midW > S(380)) midW = S(380);
+    pane_widths(w, &L->leftW, &midW);
     x0 = L->leftW + 1;
     x1 = x0 + midW;
     SetRect(&L->mid, x0, 0, x1, h);
     inner = midW - S(PAD) * 2;
 
-    /* ジャケット画像の下に積むもの: 曲名 2 行、アーティスト等 2 行、シークバー、時間、⏮▶⏭、🔀🔁音量… */
-    stack = S(12) + S(48) + S(4) + S(38) + S(10) + S(24) + S(18) + S(10) + S(56) + S(6) + S(36);
-    art = h - S(PAD) - stack - S(PAD);
+    /* ジャケット画像の下に積むもの: 曲名 2 行、アーティスト等 2 行、シークバー、時間、🔀⏮▶⏭🔁、音量… 。
+       操作の部分は詰めて小さく(本人の指摘「縦に広すぎる。ボタンはこんなに大きくなくていい」)、空いた分は画像に回す */
+    stack = S(10) + S(48) + S(2) + S(38) + S(8) + S(20) + S(16) + S(6) + S(44) + S(4) + S(28);
+    art = h - S(PAD) - stack - S(12);
     if (art > inner) art = inner;
     if (art < S(48)) art = S(48);
     y = S(PAD);
     SetRect(&L->art, x0 + S(PAD) + (inner - art) / 2, y, x0 + S(PAD) + (inner - art) / 2 + art, y + art);
-    y += art + S(12);
+    y += art + S(10);
     SetRect(&L->title, x0 + S(PAD), y, x1 - S(PAD), y + S(48));
-    y += S(48) + S(4);
+    y += S(48) + S(2);
     SetRect(&L->sub, x0 + S(PAD), y, x1 - S(PAD), y + S(38));
-    y += S(38) + S(10);
-    SetRect(&L->seek, x0 + S(PAD) - S(6), y, x1 - S(PAD) + S(6), y + S(24));   /* 横棒のつまみの分、少し外へ */
-    y += S(24);
-    SetRect(&L->timeL, x0 + S(PAD), y, x0 + S(PAD) + S(60), y + S(18));
-    SetRect(&L->timeR, x1 - S(PAD) - S(60), y, x1 - S(PAD), y + S(18));
-    y += S(18) + S(10);
+    y += S(38) + S(8);
+    SetRect(&L->seek, x0 + S(PAD) - S(6), y, x1 - S(PAD) + S(6), y + S(20));   /* 横棒のつまみの分、少し外へ */
+    y += S(20);
+    SetRect(&L->timeL, x0 + S(PAD), y, x0 + S(PAD) + S(60), y + S(16));
+    SetRect(&L->timeR, x1 - S(PAD) - S(60), y, x1 - S(PAD), y + S(16));
+    y += S(16) + S(6);
     L->row1Y = y;
-    y += S(56) + S(6);
+    y += S(44) + S(4);
     L->row2Y = y;
 }
 
@@ -704,7 +734,7 @@ static void layout(void)
 {
     Layout L;
     RECT   rc;
-    int    w, h, cx, x, volL, volR;
+    int    w, h, cx, x, gap, inner, volL, volR;
     HDWP   dw;
 
     if (!g_tracks) return;
@@ -712,29 +742,41 @@ static void layout(void)
     GetClientRect(g_wnd, &rc);
     w = rc.right;
     h = rc.bottom;
+    inner = L.mid.right - L.mid.left - S(PAD) * 2;
 
     dw = BeginDeferWindowPos(12);
     dw = DeferWindowPos(dw, g_pls, NULL, 0, 0, L.leftW, h, SWP_NOZORDER | SWP_NOACTIVATE);
     dw = DeferWindowPos(dw, g_tracks, NULL, L.mid.right + 1, 0, max(w - L.mid.right - 1, 0), h, SWP_NOZORDER | SWP_NOACTIVATE);
     dw = DeferWindowPos(dw, g_seek, NULL, L.seek.left, L.seek.top, L.seek.right - L.seek.left, L.seek.bottom - L.seek.top,
                         SWP_NOZORDER | SWP_NOACTIVATE);
-    /* ⏮ ▶ ⏭ は真ん中に */
+    /* 1 段目: 🔀 ⏮ ▶ ⏭ 🔁 を真ん中に(YouTube Music と同じ並び)。間は欄の幅に合わせて詰める */
+    gap = (inner - (S(28) + S(32) + S(44) + S(32) + S(28))) / 4;
+    gap = max(S(2), min(gap, S(14)));
     cx = (L.mid.left + L.mid.right) / 2;
-    dw = DeferWindowPos(dw, g_btn[1], NULL, cx - S(28), L.row1Y, S(56), S(56), SWP_NOZORDER | SWP_NOACTIVATE);
-    dw = DeferWindowPos(dw, g_btn[0], NULL, cx - S(28) - S(16) - S(40), L.row1Y + S(8), S(40), S(40), SWP_NOZORDER | SWP_NOACTIVATE);
-    dw = DeferWindowPos(dw, g_btn[2], NULL, cx + S(28) + S(16), L.row1Y + S(8), S(40), S(40), SWP_NOZORDER | SWP_NOACTIVATE);
-    /* 🔀 🔁 は左、… は右、その間に音量 */
-    x = L.mid.left + S(PAD) - S(4);
-    dw = DeferWindowPos(dw, g_btn[3], NULL, x, L.row2Y + S(2), S(32), S(32), SWP_NOZORDER | SWP_NOACTIVATE);
-    x += S(32) + S(4);
-    dw = DeferWindowPos(dw, g_btn[4], NULL, x, L.row2Y + S(2), S(32), S(32), SWP_NOZORDER | SWP_NOACTIVATE);
-    volL = x + S(32) + S(12);
-    volR = L.mid.right - S(PAD) + S(4) - S(32) - S(8);
-    dw = DeferWindowPos(dw, g_btn[5], NULL, volR + S(8), L.row2Y + S(2), S(32), S(32), SWP_NOZORDER | SWP_NOACTIVATE);
-    dw = DeferWindowPos(dw, g_vol, NULL, volL, L.row2Y + S(6), max(volR - volL, S(40)), S(24), SWP_NOZORDER | SWP_NOACTIVATE);
+    dw = DeferWindowPos(dw, g_btn[1], NULL, cx - S(22), L.row1Y, S(44), S(44), SWP_NOZORDER | SWP_NOACTIVATE);
+    x = cx - S(22) - gap - S(32);
+    dw = DeferWindowPos(dw, g_btn[0], NULL, x, L.row1Y + S(6), S(32), S(32), SWP_NOZORDER | SWP_NOACTIVATE);
+    dw = DeferWindowPos(dw, g_btn[3], NULL, x - gap - S(28), L.row1Y + S(8), S(28), S(28), SWP_NOZORDER | SWP_NOACTIVATE);
+    x = cx + S(22) + gap;
+    dw = DeferWindowPos(dw, g_btn[2], NULL, x, L.row1Y + S(6), S(32), S(32), SWP_NOZORDER | SWP_NOACTIVATE);
+    dw = DeferWindowPos(dw, g_btn[4], NULL, x + S(32) + gap, L.row1Y + S(8), S(28), S(28), SWP_NOZORDER | SWP_NOACTIVATE);
+    /* 2 段目: 音量と … */
+    volL = L.mid.left + S(PAD) - S(6);
+    volR = L.mid.right - S(PAD) + S(4) - S(28) - S(6);
+    dw = DeferWindowPos(dw, g_btn[5], NULL, volR + S(6), L.row2Y, S(28), S(28), SWP_NOZORDER | SWP_NOACTIVATE);
+    dw = DeferWindowPos(dw, g_vol, NULL, volL, L.row2Y + S(4), max(volR - volL, S(40)), S(20), SWP_NOZORDER | SWP_NOACTIVATE);
     EndDeferWindowPos(dw);
-
     InvalidateRect(g_wnd, NULL, FALSE);
+}
+
+/* 欄の境目のつかみどころ(真ん中の欄の左右の端、数 px)。1 = 左と真ん中の間、2 = 真ん中と右の間 */
+static int splitter_hit(int x)
+{
+    Layout L;
+    get_layout(&L);
+    if (x >= L.leftW - S(2) && x <= L.leftW + S(5)) return 1;
+    if (x >= L.mid.right - S(5) && x <= L.mid.right + S(2)) return 2;
+    return 0;
 }
 
 /* ジャケット画像が無いときの空の枠 */
@@ -1782,9 +1824,9 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
     case WM_GETMINMAXINFO: {
         MINMAXINFO *mi = (MINMAXINFO *)lp;
-        /* 左 150 + 真ん中 260 + 曲の一覧が読める幅。高さは真ん中の欄(小さな画像 + 曲名・操作)が収まるまで */
-        mi->ptMinTrackSize.x = S(720);
-        mi->ptMinTrackSize.y = S(440);
+        /* 3 つの欄の下限の合計。高さは真ん中の欄(小さな画像 + 曲名・操作)が収まるまで */
+        mi->ptMinTrackSize.x = S(LEFT_MIN + MID_MIN + RIGHT_MIN) + 2;
+        mi->ptMinTrackSize.y = S(400);
         return 0;
     }
     case WM_DPICHANGED: {
@@ -1794,6 +1836,53 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         apply_fonts();
         SetWindowPos(h, NULL, r->left, r->top, r->right - r->left, r->bottom - r->top, SWP_NOZORDER | SWP_NOACTIVATE);
         layout();
+        return 0;
+    }
+    /* 欄の境目をドラッグして、左と真ん中の欄の幅を別々に決める(本人の要望)。ダブルクリックで窓に合わせる幅に戻す */
+    case WM_SETCURSOR:
+        if ((HWND)wp == h && LOWORD(lp) == HTCLIENT) {
+            POINT p;
+            GetCursorPos(&p);
+            ScreenToClient(h, &p);
+            if (g_split || splitter_hit(p.x)) { SetCursor(LoadCursorW(NULL, IDC_SIZEWE)); return TRUE; }
+        }
+        break;
+    case WM_LBUTTONDOWN: {
+        int x = (short)LOWORD(lp), hit = splitter_hit(x);
+        if (hit) {
+            Layout L;
+            get_layout(&L);
+            g_split = hit;
+            g_splitX0 = x;
+            g_splitW0 = hit == 1 ? L.leftW : L.mid.right - L.mid.left;
+            SetCapture(h);
+        }
+        return 0;
+    }
+    case WM_MOUSEMOVE:
+        if (g_split) {
+            int dip = MulDiv(g_splitW0 + (short)LOWORD(lp) - g_splitX0, 96, (int)g_dpi);
+            if (g_split == 1) g_cfg.paneLeft = max(LEFT_MIN, min(dip, LEFT_MAX));
+            else g_cfg.paneMid = max(MID_MIN, min(dip, MID_MAX));
+            layout();
+            UpdateWindow(h);
+        }
+        return 0;
+    case WM_LBUTTONUP:
+        if (g_split) {
+            g_split = 0;
+            ReleaseCapture();
+            cfg_save();
+        }
+        return 0;
+    case WM_CAPTURECHANGED:
+        g_split = 0;
+        return 0;
+    case WM_LBUTTONDBLCLK: {
+        int hit = splitter_hit((short)LOWORD(lp));
+        if (hit == 1) g_cfg.paneLeft = 0;
+        else if (hit == 2) g_cfg.paneMid = 0;
+        if (hit) { layout(); cfg_save(); }
         return 0;
     }
     case WM_ERASEBKGND:
@@ -2030,6 +2119,7 @@ int ui_run(HINSTANCE inst, BOOL mute, BOOL noActivate, const WCHAR *openM3u)
 
     memset(&wc, 0, sizeof(wc));
     wc.cbSize = sizeof(wc);
+    wc.style = CS_DBLCLKS;              /* 欄の境目のダブルクリック */
     wc.lpfnWndProc = wnd_proc;
     wc.hInstance = inst;
     wc.hIcon = LoadIconW(inst, MAKEINTRESOURCEW(IDI_APP));

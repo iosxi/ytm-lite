@@ -22,7 +22,7 @@
 #include <wchar.h>
 
 #define APP_NAME     L"ytm-lite"
-#define APP_VERSION  "16"            /* .rc の VERSIONINFO と .manifest も合わせて上げる */
+#define APP_VERSION  "17"            /* .rc の VERSIONINFO と .manifest も合わせて上げる */
 
 /* 画面のスレッドへ届ける通知 */
 #define WM_APP_LIBRARY   (WM_APP + 1)   /* lParam = LibResult*  */
@@ -112,6 +112,7 @@ typedef struct {
     int   volume;               /* 0〜100 */
     int   shuffle, repeat;
     int   x, y, w, h, maximized;
+    int   paneLeft, paneMid;    /* 左(ライブラリ)と真ん中の欄の幅(DIP)。0 = 窓の幅に合わせる。境目をドラッグして決める */
     int   theme;                /* 0 = システムに合わせる、1 = ライト、2 = ダーク */
     int   mediakeys;            /* キーボードのメディアキーを横取りする */
     int   thumbnail;            /* ジャケット画像を SMTC に渡す */

@@ -128,6 +128,8 @@ void cfg_load(void)
     g_cfg.w         = get_int(L"w", 0);
     g_cfg.h         = get_int(L"h", 0);
     g_cfg.maximized = get_int(L"maximized", 0);
+    g_cfg.paneLeft  = get_int(L"pane_left", 0);
+    g_cfg.paneMid   = get_int(L"pane_mid", 0);
     g_cfg.theme     = get_int(L"theme", 0);
     g_cfg.mediakeys = get_int(L"mediakeys", 1);
     g_cfg.thumbnail = get_int(L"thumbnail", 1);
@@ -179,6 +181,8 @@ void cfg_save(void)
         put_int(L"h", g_cfg.h);
     }
     put_int(L"maximized", g_cfg.maximized);
+    put_int(L"pane_left", g_cfg.paneLeft);
+    put_int(L"pane_mid", g_cfg.paneMid);
     put_str(L"last_playlist", g_cfg.lastPlaylist);
 }
 
