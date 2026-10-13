@@ -53,8 +53,13 @@
 #define TIMER_FETCH  3
 #define FETCH_DELAY_MS 400
 
-#define BAR_H        88            /* 下の帯の高さ(DIP) */
 #define PREFETCH_MS  40000
+
+/* 3 つの欄(YouTube Music の画面に倣う。2026-10-13 本人の指示): 左にライブラリ、真ん中にジャケット画像と
+   操作、右に曲の一覧。寸法は DIP */
+#define PAD          16            /* 真ん中の欄の内側の余白 */
+#define ROW_H_TRACK  52            /* 曲の一覧の 1 行(曲名と、アーティスト・アルバムの 2 段) */
+#define ROW_H_PLS    44            /* ライブラリの 1 行(名前と、作った人などの 2 段) */
 
 /* Segoe MDL2 Assets / Segoe Fluent Icons の字 */
 #define G_PREV    L"\xE892"
@@ -64,6 +69,7 @@
 #define G_SHUFFLE L"\xE8B1"
 #define G_REPEAT  L"\xE8EE"
 #define G_MORE    L"\xE712"
+#define G_MUSIC   L"\xE8D6"         /* ジャケット画像が無いときの印 */
 
 typedef struct { LONG ref; TrackList t; } TL;
 
@@ -80,7 +86,8 @@ typedef struct {
 
 static HWND   g_wnd, g_pls, g_tracks, g_seek, g_vol, g_btn[6];
 static UINT   g_dpi = 96;
-static HFONT  g_font, g_fontBold, g_fontIcon, g_fontIconBig;
+static HFONT  g_font, g_fontBold, g_fontTitle, g_fontIcon, g_fontIconBig, g_fontIconArt;
+static HIMAGELIST g_ilTracks, g_ilPls;  /* 行の高さを決めるためだけの空の画像リスト */
 static BOOL   g_mute;
 
 static Entry *g_ent;
@@ -143,20 +150,40 @@ static void fmt_time(WCHAR *out, size_t cap, int ms)
     out[cap - 1] = 0;
 }
 
-/* 下の帯だけを描き直す(一覧は描き直さない) */
-static void invalidate_bar(void)
+/* 真ん中の欄の配置(get_layout で求める。窓のクライアント座標) */
+typedef struct {
+    int  leftW;                 /* 左の欄(ライブラリ)の幅 */
+    RECT mid;                   /* 真ん中の欄 */
+    RECT art;                   /* ジャケット画像(正方形) */
+    RECT title, sub;            /* 曲名(2 行まで)、アーティスト・アルバムか状態(2 行まで) */
+    RECT seek, timeL, timeR;    /* シークバーと、その下の時間 */
+    int  row1Y, row2Y;          /* ⏮▶⏭ の段、🔀🔁音量… の段の上端 */
+} Layout;
+
+static void get_layout(Layout *L);
+
+/* 真ん中の欄の字と時間だけを描き直す(一覧やジャケット画像は描き直さない) */
+static void invalidate_info(void)
 {
-    RECT rc;
-    GetClientRect(g_wnd, &rc);
-    rc.top = rc.bottom - S(BAR_H);
-    InvalidateRect(g_wnd, &rc, FALSE);
+    Layout L;
+    RECT   r;
+    get_layout(&L);
+    SetRect(&r, L.mid.left, L.title.top, L.mid.right, L.timeR.bottom);
+    InvalidateRect(g_wnd, &r, FALSE);
+}
+
+static void invalidate_art(void)
+{
+    Layout L;
+    get_layout(&L);
+    InvalidateRect(g_wnd, &L.art, FALSE);
 }
 
 static void set_status(const WCHAR *s, BOOL err)
 {
     wcsncpy_s(g_status, ARRAYSIZE(g_status), s ? s : L"", _TRUNCATE);
     g_statusErr = err;
-    invalidate_bar();
+    invalidate_info();
 }
 
 static void set_status_u8(const char *s, BOOL err)
@@ -292,7 +319,7 @@ static BOOL tracks_overlay(WCHAR *buf, size_t cap, BOOL *err)
         if (g_entN) wcscpy_s(buf, cap, L"左のプレイリストを選んでください");
         else if (g_libErr[0]) { _snwprintf(buf, cap, L"ライブラリを読めませんでした\r\n%s", g_libErr); buf[cap - 1] = 0; *err = TRUE; }
         else if (g_cfg.cookie) wcscpy_s(buf, cap, L"ライブラリを読み込み中…");
-        else wcscpy_s(buf, cap, L"右下の … →「ログイン情報を設定…」の手順で設定すると、\r\n自分のプレイリストがここに出ます");
+        else wcscpy_s(buf, cap, L"… →「ログイン情報を設定…」の手順で設定すると、\r\n自分のプレイリストがここに出ます");
         return TRUE;
     }
     {
@@ -316,10 +343,44 @@ static BOOL tracks_overlay(WCHAR *buf, size_t cap, BOOL *err)
     return TRUE;
 }
 
+/* 1 列だけの一覧の列幅を、いまの幅にぴったり合わせる。狭いと列の右端に線が出て、広いと横のスクロールバーが出る。
+   件数が一画面を超えるのに縦のスクロールバーがまだ無ければ、その幅を先に引く(出たときに一覧へ WM_SIZE が
+   来ず、列がはみ出したまま横のスクロールバーが出た。2026-10-13 実測)。大きさか件数が変わったら呼ぶ */
+static void fit_column(HWND h, int count)
+{
+    RECT c;
+    int  w;
+    BOOL hasV = (GetWindowLongW(h, GWL_STYLE) & WS_VSCROLL) != 0;
+    BOOL needV = hasV || count > ListView_GetCountPerPage(h);
+    GetClientRect(h, &c);
+    w = c.right;
+    if (!hasV && needV) w -= GetSystemMetricsForDpi(SM_CXVSCROLL, g_dpi);
+    /* 縦のスクロールバーがあると、列の幅が内側の幅と同じでも横のスクロールバーが出た(608 で出て 607 で消えた。
+       2026-10-13 実測)。無いときは同じ幅で出なかった */
+    if (needV) w -= 1;
+    if (w < 0) w = 0;
+    if (ListView_GetColumnWidth(h, 0) != w) ListView_SetColumnWidth(h, 0, w);
+}
+
+/* 件数が変わるときは、一覧がスクロールバーを決める前に、新しい件数で列の幅を合わせておく
+   (後から狭めても、一度付いた横のスクロールバーが外れなかった。2026-10-13 実測) */
+static LRESULT CALLBACK pls_subclass(HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR ref)
+{
+    LRESULT r;
+    (void)id; (void)ref;
+    if (msg == LVM_SETITEMCOUNT) fit_column(h, (int)wp);
+    r = DefSubclassProc(h, msg, wp, lp);
+    if (msg == WM_SIZE) fit_column(h, ListView_GetItemCount(h));
+    return r;
+}
+
 static LRESULT CALLBACK tracks_subclass(HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR ref)
 {
-    LRESULT r = DefSubclassProc(h, msg, wp, lp);
+    LRESULT r;
     (void)id; (void)ref;
+    if (msg == LVM_SETITEMCOUNT) fit_column(h, (int)wp);
+    r = DefSubclassProc(h, msg, wp, lp);
+    if (msg == WM_SIZE) fit_column(h, ListView_GetItemCount(h));
     if (msg == WM_PAINT) {
         WCHAR text[512];
         BOOL  err;
@@ -329,7 +390,7 @@ static LRESULT CALLBACK tracks_subclass(HWND h, UINT msg, WPARAM wp, LPARAM lp, 
             HFONT of = (HFONT)SelectObject(dc, g_font);
             HWND  header = ListView_GetHeader(h);
             GetClientRect(h, &rc);
-            if (header && GetWindowRect(header, &hd)) rc.top += hd.bottom - hd.top;
+            if (header && IsWindowVisible(header) && GetWindowRect(header, &hd)) rc.top += hd.bottom - hd.top;
             rc.top += S(48);
             InflateRect(&rc, -S(16), 0);
             SetBkMode(dc, TRANSPARENT);
@@ -423,6 +484,7 @@ static void stop_playback(const WCHAR *msg, BOOL err)
 {
     g_gen++;
     art_set(NULL, 0);
+    invalidate_art();
     g_loadingAudio = FALSE;
     worker_cancel_audio();
     player_stop();
@@ -445,6 +507,7 @@ static void start_track(BOOL user)
     KillTimer(g_wnd, TIMER_SKIP);
     KillTimer(g_wnd, TIMER_FETCH);
     art_set(NULL, 0);                   /* 新しい画像が届くまでは空(前の曲の絵は紛らわしい。本人の指定) */
+    invalidate_art();
     smtc_track(t->title, t->artist, t->album);
     /* ジャケット画像はこちらで取って、バイト列で渡す。URL のまま渡す方式(CreateFromUri)は
        Windows の通信部品が 12 個読み込まれ、Working Set が 7MB 増えたのでやめた(2026-10-13 実測) */
@@ -471,7 +534,7 @@ static void start_track(BOOL user)
     clear_prefetch();
     ensure_timer(TRUE);
     InvalidateRect(g_tracks, NULL, FALSE);
-    invalidate_bar();
+    invalidate_info();
 }
 
 static void play_from(TL *tl, int idx)
@@ -562,6 +625,8 @@ static void create_fonts(void)
     if (g_fontBold) DeleteObject(g_fontBold);
     if (g_fontIcon) DeleteObject(g_fontIcon);
     if (g_fontIconBig) DeleteObject(g_fontIconBig);
+    if (g_fontTitle) DeleteObject(g_fontTitle);
+    if (g_fontIconArt) DeleteObject(g_fontIconArt);
     memset(&ncm, 0, sizeof(ncm));
     ncm.cbSize = sizeof(ncm);
     SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0, g_dpi);
@@ -569,6 +634,8 @@ static void create_fonts(void)
     lf = ncm.lfMessageFont;
     lf.lfWeight = FW_SEMIBOLD;
     g_fontBold = CreateFontIndirectW(&lf);
+    lf.lfHeight = lf.lfHeight * 5 / 4;          /* 真ん中の欄の曲名は少し大きく */
+    g_fontTitle = CreateFontIndirectW(&lf);
 
     memset(&lf, 0, sizeof(lf));
     lf.lfHeight = -S(16);
@@ -588,81 +655,99 @@ static void create_fonts(void)
     }
     lf.lfHeight = -S(20);
     g_fontIconBig = CreateFontIndirectW(&lf);
+    lf.lfHeight = -S(48);
+    g_fontIconArt = CreateFontIndirectW(&lf);
 }
-
-typedef struct { RECT bar, timeL, timeR, text; int leftW; } Layout;
 
 static void get_layout(Layout *L)
 {
     RECT rc;
-    int  w, h, barTop, rowY, rowH, x, xr;
+    int  w, h, midW, x0, x1, inner, stack, art, y;
     GetClientRect(g_wnd, &rc);
     w = rc.right;
     h = rc.bottom;
-    barTop = h - S(BAR_H);
-    if (barTop < 0) barTop = 0;
-    L->leftW = w * 28 / 100;
-    if (L->leftW < S(160)) L->leftW = S(160);
-    if (L->leftW > S(320)) L->leftW = S(320);
-    SetRect(&L->bar, 0, barTop, w, h);
-    SetRect(&L->timeL, S(8), barTop + S(6), S(8) + S(48), barTop + S(30));
-    SetRect(&L->timeR, w - S(8) - S(48), barTop + S(6), w - S(8), barTop + S(30));
-    rowY = barTop + S(34);
-    rowH = S(48);
-    x = S(12) + S(36) + S(4) + S(44) + S(4) + S(36) + S(16);
-    xr = w - S(12) - S(32) - S(8) - S(96) - S(8) - S(32) - S(4) - S(32) - S(12);
-    SetRect(&L->text, x, rowY, xr > x ? xr : x, rowY + rowH);
+    /* 左はやや狭く(本人の指定)、真ん中は板の幅を決めて、残りを曲の一覧に */
+    L->leftW = w * 18 / 100;
+    if (L->leftW < S(150)) L->leftW = S(150);
+    if (L->leftW > S(240)) L->leftW = S(240);
+    midW = w * 28 / 100;
+    if (midW < S(260)) midW = S(260);
+    if (midW > S(380)) midW = S(380);
+    x0 = L->leftW + 1;
+    x1 = x0 + midW;
+    SetRect(&L->mid, x0, 0, x1, h);
+    inner = midW - S(PAD) * 2;
+
+    /* ジャケット画像の下に積むもの: 曲名 2 行、アーティスト等 2 行、シークバー、時間、⏮▶⏭、🔀🔁音量… */
+    stack = S(12) + S(48) + S(4) + S(38) + S(10) + S(24) + S(18) + S(10) + S(56) + S(6) + S(36);
+    art = h - S(PAD) - stack - S(PAD);
+    if (art > inner) art = inner;
+    if (art < S(48)) art = S(48);
+    y = S(PAD);
+    SetRect(&L->art, x0 + S(PAD) + (inner - art) / 2, y, x0 + S(PAD) + (inner - art) / 2 + art, y + art);
+    y += art + S(12);
+    SetRect(&L->title, x0 + S(PAD), y, x1 - S(PAD), y + S(48));
+    y += S(48) + S(4);
+    SetRect(&L->sub, x0 + S(PAD), y, x1 - S(PAD), y + S(38));
+    y += S(38) + S(10);
+    SetRect(&L->seek, x0 + S(PAD) - S(6), y, x1 - S(PAD) + S(6), y + S(24));   /* 横棒のつまみの分、少し外へ */
+    y += S(24);
+    SetRect(&L->timeL, x0 + S(PAD), y, x0 + S(PAD) + S(60), y + S(18));
+    SetRect(&L->timeR, x1 - S(PAD) - S(60), y, x1 - S(PAD), y + S(18));
+    y += S(18) + S(10);
+    L->row1Y = y;
+    y += S(56) + S(6);
+    L->row2Y = y;
 }
 
 static void layout(void)
 {
     Layout L;
     RECT   rc;
-    int    w, barTop, rowY, rowH, x;
+    int    w, h, cx, x, volL, volR;
     HDWP   dw;
 
     if (!g_tracks) return;
     get_layout(&L);
     GetClientRect(g_wnd, &rc);
     w = rc.right;
-    barTop = L.bar.top;
-    rowY = barTop + S(34);
-    rowH = S(48);
+    h = rc.bottom;
 
     dw = BeginDeferWindowPos(12);
-    dw = DeferWindowPos(dw, g_pls, NULL, 0, 0, L.leftW, barTop, SWP_NOZORDER | SWP_NOACTIVATE);
-    dw = DeferWindowPos(dw, g_tracks, NULL, L.leftW + 1, 0, w - L.leftW - 1, barTop, SWP_NOZORDER | SWP_NOACTIVATE);
-    dw = DeferWindowPos(dw, g_seek, NULL, L.timeL.right, barTop + S(6), L.timeR.left - L.timeL.right, S(24), SWP_NOZORDER | SWP_NOACTIVATE);
-    x = S(12);
-    dw = DeferWindowPos(dw, g_btn[0], NULL, x, rowY + (rowH - S(36)) / 2, S(36), S(36), SWP_NOZORDER | SWP_NOACTIVATE);
-    x += S(36) + S(4);
-    dw = DeferWindowPos(dw, g_btn[1], NULL, x, rowY + (rowH - S(44)) / 2, S(44), S(44), SWP_NOZORDER | SWP_NOACTIVATE);
-    x += S(44) + S(4);
-    dw = DeferWindowPos(dw, g_btn[2], NULL, x, rowY + (rowH - S(36)) / 2, S(36), S(36), SWP_NOZORDER | SWP_NOACTIVATE);
-    x = w - S(12) - S(32);
-    dw = DeferWindowPos(dw, g_btn[5], NULL, x, rowY + (rowH - S(32)) / 2, S(32), S(32), SWP_NOZORDER | SWP_NOACTIVATE);
-    x -= S(8) + S(96);
-    dw = DeferWindowPos(dw, g_vol, NULL, x, rowY + (rowH - S(24)) / 2, S(96), S(24), SWP_NOZORDER | SWP_NOACTIVATE);
-    x -= S(8) + S(32);
-    dw = DeferWindowPos(dw, g_btn[4], NULL, x, rowY + (rowH - S(32)) / 2, S(32), S(32), SWP_NOZORDER | SWP_NOACTIVATE);
-    x -= S(4) + S(32);
-    dw = DeferWindowPos(dw, g_btn[3], NULL, x, rowY + (rowH - S(32)) / 2, S(32), S(32), SWP_NOZORDER | SWP_NOACTIVATE);
+    dw = DeferWindowPos(dw, g_pls, NULL, 0, 0, L.leftW, h, SWP_NOZORDER | SWP_NOACTIVATE);
+    dw = DeferWindowPos(dw, g_tracks, NULL, L.mid.right + 1, 0, max(w - L.mid.right - 1, 0), h, SWP_NOZORDER | SWP_NOACTIVATE);
+    dw = DeferWindowPos(dw, g_seek, NULL, L.seek.left, L.seek.top, L.seek.right - L.seek.left, L.seek.bottom - L.seek.top,
+                        SWP_NOZORDER | SWP_NOACTIVATE);
+    /* ⏮ ▶ ⏭ は真ん中に */
+    cx = (L.mid.left + L.mid.right) / 2;
+    dw = DeferWindowPos(dw, g_btn[1], NULL, cx - S(28), L.row1Y, S(56), S(56), SWP_NOZORDER | SWP_NOACTIVATE);
+    dw = DeferWindowPos(dw, g_btn[0], NULL, cx - S(28) - S(16) - S(40), L.row1Y + S(8), S(40), S(40), SWP_NOZORDER | SWP_NOACTIVATE);
+    dw = DeferWindowPos(dw, g_btn[2], NULL, cx + S(28) + S(16), L.row1Y + S(8), S(40), S(40), SWP_NOZORDER | SWP_NOACTIVATE);
+    /* 🔀 🔁 は左、… は右、その間に音量 */
+    x = L.mid.left + S(PAD) - S(4);
+    dw = DeferWindowPos(dw, g_btn[3], NULL, x, L.row2Y + S(2), S(32), S(32), SWP_NOZORDER | SWP_NOACTIVATE);
+    x += S(32) + S(4);
+    dw = DeferWindowPos(dw, g_btn[4], NULL, x, L.row2Y + S(2), S(32), S(32), SWP_NOZORDER | SWP_NOACTIVATE);
+    volL = x + S(32) + S(12);
+    volR = L.mid.right - S(PAD) + S(4) - S(32) - S(8);
+    dw = DeferWindowPos(dw, g_btn[5], NULL, volR + S(8), L.row2Y + S(2), S(32), S(32), SWP_NOZORDER | SWP_NOACTIVATE);
+    dw = DeferWindowPos(dw, g_vol, NULL, volL, L.row2Y + S(6), max(volR - volL, S(40)), S(24), SWP_NOZORDER | SWP_NOACTIVATE);
     EndDeferWindowPos(dw);
 
-    /* 曲の一覧の列幅 */
-    {
-        int cw = w - L.leftW - 1 - GetSystemMetricsForDpi(SM_CXVSCROLL, g_dpi) - S(4);
-        int num = S(44), dur = S(60), rest = cw - num - dur;
-        if (rest < S(150)) rest = S(150);
-        ListView_SetColumnWidth(g_tracks, 0, num);
-        ListView_SetColumnWidth(g_tracks, 1, rest * 42 / 100);
-        ListView_SetColumnWidth(g_tracks, 2, rest * 30 / 100);
-        ListView_SetColumnWidth(g_tracks, 3, rest - rest * 42 / 100 - rest * 30 / 100);
-        ListView_SetColumnWidth(g_tracks, 4, dur);
-        ListView_SetColumnWidth(g_pls, 0, L.leftW - GetSystemMetricsForDpi(SM_CXVSCROLL, g_dpi));
-    }
-    art_refresh(FALSE);                 /* 一覧の大きさが変わったら、背景の絵も合わせる */
     InvalidateRect(g_wnd, NULL, FALSE);
+}
+
+/* ジャケット画像が無いときの空の枠 */
+static void paint_art_placeholder(HDC dc, const RECT *r)
+{
+    HBRUSH b = CreateSolidBrush(theme_line());
+    HFONT  of;
+    FillRect(dc, r, b);
+    DeleteObject(b);
+    of = (HFONT)SelectObject(dc, g_fontIconArt);
+    SetTextColor(dc, theme_dim_text());
+    DrawTextW(dc, G_MUSIC, -1, (RECT *)r, DT_SINGLELINE | DT_CENTER | DT_VCENTER | DT_NOPREFIX);
+    SelectObject(dc, of);
 }
 
 static void paint(HDC hdc)
@@ -672,65 +757,80 @@ static void paint(HDC hdc)
     HDC     mem;
     HBITMAP bmp, oldBmp;
     HFONT   oldFont;
-    int     st, pos, dur, gen;
+    int     st, pos, dur, gen, mw, mh;
     WCHAR   t[32];
     Track  *tr = cur_track();
     HBRUSH  line;
 
     get_layout(&L);
     GetClientRect(g_wnd, &rc);
-    /* 2 つの一覧の境目 */
+    /* 欄の境目 */
     line = CreateSolidBrush(theme_line());
-    SetRect(&r, L.leftW, 0, L.leftW + 1, L.bar.top);
+    SetRect(&r, L.leftW, 0, L.leftW + 1, rc.bottom);
     FillRect(hdc, &r, line);
+    SetRect(&r, L.mid.right, 0, L.mid.right + 1, rc.bottom);
+    FillRect(hdc, &r, line);
+    DeleteObject(line);
 
-    /* 下の帯はちらつかないよう裏で描く */
+    /* 真ん中の欄はちらつかないよう裏で描く */
+    mw = L.mid.right - L.mid.left;
+    mh = L.mid.bottom - L.mid.top;
+    if (mw <= 0 || mh <= 0) return;
     mem = CreateCompatibleDC(hdc);
-    bmp = CreateCompatibleBitmap(hdc, L.bar.right - L.bar.left, L.bar.bottom - L.bar.top);
+    bmp = CreateCompatibleBitmap(hdc, mw, mh);
     oldBmp = (HBITMAP)SelectObject(mem, bmp);
-    SetViewportOrgEx(mem, 0, -L.bar.top, NULL);
-    FillRect(mem, &L.bar, theme_footer_brush());
-    SetRect(&r, 0, L.bar.top, rc.right, L.bar.top + 1);
-    FillRect(mem, &r, line);
+    SetViewportOrgEx(mem, -L.mid.left, 0, NULL);
+    FillRect(mem, &L.mid, theme_footer_brush());
     SetBkMode(mem, TRANSPARENT);
+
+    if (!art_draw(mem, &L.art)) paint_art_placeholder(mem, &L.art);
 
     player_status(&st, &pos, &dur, &gen);
     if (tr && tr->dur && !dur) dur = tr->dur * 1000;
     if (st == PS_IDLE && !g_loadingAudio) pos = 0;
     if (g_dragging) pos = (int)SendMessageW(g_seek, SLM_GETPOS, 0, 0) * 1000;
-    oldFont = (HFONT)SelectObject(mem, g_font);
-    SetTextColor(mem, theme_dim_text());
-    fmt_time(t, ARRAYSIZE(t), tr ? pos : 0);
-    DrawTextW(mem, t, -1, &L.timeL, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX);
-    fmt_time(t, ARRAYSIZE(t), tr ? dur : 0);
-    DrawTextW(mem, t, -1, &L.timeR, DT_SINGLELINE | DT_VCENTER | DT_RIGHT | DT_NOPREFIX);
 
-    r = L.text;
-    r.bottom = r.top + (L.text.bottom - L.text.top) / 2;
-    SelectObject(mem, g_fontBold);
+    /* 曲名(2 行まで)。1 行で収まったら、その下にすぐアーティストを続ける */
+    oldFont = (HFONT)SelectObject(mem, g_fontTitle);
     SetTextColor(mem, theme_text());
-    DrawTextW(mem, tr && tr->title ? tr->title : APP_NAME, -1, &r, DT_SINGLELINE | DT_BOTTOM | DT_LEFT | DT_NOPREFIX | DT_END_ELLIPSIS);
-    r.top = r.bottom + S(2);
-    r.bottom = L.text.bottom;
+    {
+        const WCHAR *title = tr && tr->title ? tr->title : APP_NAME;
+        RECT         calc = L.title;
+        int          used;
+        DrawTextW(mem, title, -1, &calc, DT_CENTER | DT_WORDBREAK | DT_EDITCONTROL | DT_NOPREFIX | DT_CALCRECT);
+        used = min(calc.bottom - calc.top, L.title.bottom - L.title.top);
+        r = L.title;
+        r.bottom = r.top + used;
+        DrawTextW(mem, title, -1, &r, DT_CENTER | DT_WORDBREAK | DT_EDITCONTROL | DT_END_ELLIPSIS | DT_NOPREFIX);
+        r = L.sub;
+        OffsetRect(&r, 0, -(L.title.bottom - L.title.top - used));
+    }
+    /* アーティスト・アルバム、または状態(2 行まで) */
     SelectObject(mem, g_font);
     if (g_status[0]) {
         SetTextColor(mem, g_statusErr ? theme_accent() : theme_dim_text());
-        DrawTextW(mem, g_status, -1, &r, DT_SINGLELINE | DT_TOP | DT_LEFT | DT_NOPREFIX | DT_END_ELLIPSIS);
+        DrawTextW(mem, g_status, -1, &r, DT_CENTER | DT_WORDBREAK | DT_EDITCONTROL | DT_END_ELLIPSIS | DT_NOPREFIX);
     } else if (tr) {
         WCHAR buf[512];
         _snwprintf(buf, ARRAYSIZE(buf), L"%s%s%s", tr->artist ? tr->artist : L"", tr->album && tr->album[0] ? L" • " : L"",
                    tr->album ? tr->album : L"");
         buf[ARRAYSIZE(buf) - 1] = 0;
         SetTextColor(mem, theme_dim_text());
-        DrawTextW(mem, buf, -1, &r, DT_SINGLELINE | DT_TOP | DT_LEFT | DT_NOPREFIX | DT_END_ELLIPSIS);
+        DrawTextW(mem, buf, -1, &r, DT_CENTER | DT_WORDBREAK | DT_EDITCONTROL | DT_END_ELLIPSIS | DT_NOPREFIX);
     }
+    /* 時間 */
+    SetTextColor(mem, theme_dim_text());
+    fmt_time(t, ARRAYSIZE(t), tr ? pos : 0);
+    DrawTextW(mem, t, -1, &L.timeL, DT_SINGLELINE | DT_TOP | DT_LEFT | DT_NOPREFIX);
+    fmt_time(t, ARRAYSIZE(t), tr ? dur : 0);
+    DrawTextW(mem, t, -1, &L.timeR, DT_SINGLELINE | DT_TOP | DT_RIGHT | DT_NOPREFIX);
+
     SelectObject(mem, oldFont);
     SetViewportOrgEx(mem, 0, 0, NULL);
-    BitBlt(hdc, 0, L.bar.top, L.bar.right, L.bar.bottom - L.bar.top, mem, 0, 0, SRCCOPY);
+    BitBlt(hdc, L.mid.left, 0, mw, mh, mem, 0, 0, SRCCOPY);
     SelectObject(mem, oldBmp);
     DeleteObject(bmp);
     DeleteDC(mem);
-    DeleteObject(line);
 }
 
 static void draw_button(DRAWITEMSTRUCT *di)
@@ -1232,7 +1332,7 @@ static void on_tick(void)
             SendMessageW(g_seek, SLM_SETPOS, 0, 0);
             SendMessageW(g_seek, SLM_SETACTIVE, FALSE, 0);      /* 鳴り終わったら空の棒に */
         }
-        invalidate_bar();
+        invalidate_info();
     }
     if (st != PS_PLAYING && !g_loadingAudio) ensure_timer(FALSE);   /* 止まっている間は起きない */
 }
@@ -1243,59 +1343,87 @@ static void on_tick(void)
 
 static void tracks_dispinfo(NMLVDISPINFOW *di)
 {
-    Track *t;
-    int    i = di->item.iItem;
+    /* 行は自分で描く(tracks_customdraw)。ここは字を打って曲を探す機能のために曲名だけ */
+    int i = di->item.iItem;
     if (!(di->item.mask & LVIF_TEXT) || !g_viewTL || i < 0 || i >= g_viewTL->t.n) return;
-    t = &g_viewTL->t.v[i];
-    switch (di->item.iSubItem) {
-    case 0:
-        if (g_viewTL == g_playTL && cur_track() == t) wcscpy_s(di->item.pszText, di->item.cchTextMax, L"\x25B6");
-        else _snwprintf(di->item.pszText, (size_t)di->item.cchTextMax, L"%d", i + 1);
-        break;
-    case 1: wcsncpy_s(di->item.pszText, di->item.cchTextMax, t->title ? t->title : L"", _TRUNCATE); break;
-    case 2: wcsncpy_s(di->item.pszText, di->item.cchTextMax, t->artist ? t->artist : L"", _TRUNCATE); break;
-    case 3: wcsncpy_s(di->item.pszText, di->item.cchTextMax, t->album ? t->album : L"", _TRUNCATE); break;
-    case 4:
-        if (t->dur) fmt_time(di->item.pszText, (size_t)di->item.cchTextMax, t->dur * 1000);
-        else di->item.pszText[0] = 0;
-        break;
-    }
+    wcsncpy_s(di->item.pszText, di->item.cchTextMax, g_viewTL->t.v[i].title ? g_viewTL->t.v[i].title : L"", _TRUNCATE);
 }
 
+/* 自分で描く行の背景(選んでいる行・マウスが乗っている行)を塗り、行の範囲を返す */
+static void fill_row(HWND lv, NMLVCUSTOMDRAW *cd, RECT *row)
+{
+    int      i = (int)cd->nmcd.dwItemSpec;
+    BOOL     sel = ListView_GetItemState(lv, i, LVIS_SELECTED) != 0;
+    BOOL     hot = ListView_GetHotItem(lv) == i;
+    HBRUSH   b = CreateSolidBrush(sel ? theme_sel_back() : hot ? theme_hot_back() : theme_ctrl_back());
+    RECT     cl;
+    ListView_GetItemRect(lv, i, row, LVIR_BOUNDS);
+    GetClientRect(lv, &cl);
+    row->left = 0;
+    row->right = cl.right;
+    FillRect(cd->nmcd.hdc, row, b);
+    DeleteObject(b);
+}
+
+/* 上の段(太字)と下の段(薄い字)。下の段が無ければ上の段を縦の真ん中に */
+static void draw_two_lines(HDC dc, const RECT *box, const WCHAR *top, COLORREF topColor, const WCHAR *bottom, COLORREF bottomColor)
+{
+    RECT r = *box;
+    int  mid = (box->top + box->bottom) / 2;
+    SelectObject(dc, g_fontBold);
+    SetTextColor(dc, topColor);
+    if (!bottom || !bottom[0]) {
+        DrawTextW(dc, top ? top : L"", -1, &r, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX | DT_END_ELLIPSIS);
+        return;
+    }
+    r.bottom = mid - S(1);
+    DrawTextW(dc, top ? top : L"", -1, &r, DT_SINGLELINE | DT_BOTTOM | DT_LEFT | DT_NOPREFIX | DT_END_ELLIPSIS);
+    r.top = mid + S(2);
+    r.bottom = box->bottom;
+    SelectObject(dc, g_font);
+    SetTextColor(dc, bottomColor);
+    DrawTextW(dc, bottom, -1, &r, DT_SINGLELINE | DT_TOP | DT_LEFT | DT_NOPREFIX | DT_END_ELLIPSIS);
+}
+
+/* 曲の一覧の 1 行(YouTube Music に倣う): 左に番号(再生中は ▶)、曲名と「アーティスト • アルバム」の 2 段、右に時間 */
 static LRESULT tracks_customdraw(NMLVCUSTOMDRAW *cd)
 {
-    if (cd->nmcd.dwDrawStage == CDDS_PREPAINT) {
-        /* 再生中の曲のジャケット画像: ここでは行の無い所(最後の行より下、列より右)だけ。
-           行の所は、その行を描く直前に貼る(下の CDDS_ITEMPREPAINT)。字が絵に隠れないように(art_paint の説明) */
-        if (art_shown()) {
-            RECT cl, last, r;
-            int  n = ListView_GetItemCount(g_tracks);
-            GetClientRect(g_tracks, &cl);
-            if (n > 0) {
-                int idx = min(ListView_GetTopIndex(g_tracks) + ListView_GetCountPerPage(g_tracks), n - 1);
-                if (ListView_GetItemRect(g_tracks, idx, &last, LVIR_BOUNDS)) {
-                    r = cl; r.top = last.bottom;
-                    art_paint(cd->nmcd.hdc, &r);
-                    r = cl; r.left = last.right; r.bottom = last.bottom;
-                    art_paint(cd->nmcd.hdc, &r);
-                }
-            } else {
-                art_paint(cd->nmcd.hdc, &cl);
-            }
-        }
-        return CDRF_NOTIFYITEMDRAW;
-    }
+    if (cd->nmcd.dwDrawStage == CDDS_PREPAINT) return CDRF_NOTIFYITEMDRAW;
     if (cd->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) {
-        int  i = (int)cd->nmcd.dwItemSpec;
-        RECT row;
-        if (art_shown() && ListView_GetItemRect(g_tracks, i, &row, LVIR_BOUNDS))
-            art_paint(cd->nmcd.hdc, &row);      /* この行の範囲の絵を、行の字より先に */
-        if (g_viewTL && i >= 0 && i < g_viewTL->t.n) {
-            Track *t = &g_viewTL->t.v[i];
-            if (g_viewTL == g_playTL && cur_track() == t) cd->clrText = theme_accent();
-            else if (t->grey) cd->clrText = theme_dim_text();
-        }
-        return CDRF_DODEFAULT;
+        int      i = (int)cd->nmcd.dwItemSpec;
+        HDC      dc = cd->nmcd.hdc;
+        RECT     row, r;
+        Track   *t;
+        BOOL     cur;
+        WCHAR    buf[512];
+        HFONT    of;
+        if (!g_viewTL || i < 0 || i >= g_viewTL->t.n) return CDRF_DODEFAULT;
+        t = &g_viewTL->t.v[i];
+        cur = g_viewTL == g_playTL && cur_track() == t;
+        fill_row(g_tracks, cd, &row);
+        SetBkMode(dc, TRANSPARENT);
+        of = (HFONT)SelectObject(dc, g_font);
+        /* 番号 */
+        SetRect(&r, row.left + S(4), row.top, row.left + S(40), row.bottom);
+        if (cur) wcscpy_s(buf, ARRAYSIZE(buf), L"\x25B6");
+        else _snwprintf(buf, ARRAYSIZE(buf), L"%d", i + 1);
+        buf[ARRAYSIZE(buf) - 1] = 0;
+        SetTextColor(dc, cur ? theme_accent() : theme_dim_text());
+        DrawTextW(dc, buf, -1, &r, DT_SINGLELINE | DT_VCENTER | DT_RIGHT | DT_NOPREFIX);
+        /* 時間 */
+        SetRect(&r, row.right - S(64), row.top, row.right - S(12), row.bottom);
+        buf[0] = 0;
+        if (t->dur) fmt_time(buf, ARRAYSIZE(buf), t->dur * 1000);
+        SetTextColor(dc, theme_dim_text());
+        DrawTextW(dc, buf, -1, &r, DT_SINGLELINE | DT_VCENTER | DT_RIGHT | DT_NOPREFIX);
+        /* 曲名と、アーティスト • アルバム */
+        _snwprintf(buf, ARRAYSIZE(buf), L"%s%s%s", t->artist ? t->artist : L"", t->album && t->album[0] ? L" \x2022 " : L"",
+                   t->album ? t->album : L"");
+        buf[ARRAYSIZE(buf) - 1] = 0;
+        SetRect(&r, row.left + S(52), row.top, row.right - S(76), row.bottom);
+        draw_two_lines(dc, &r, t->title, cur ? theme_accent() : t->grey ? theme_dim_text() : theme_text(), buf, theme_dim_text());
+        SelectObject(dc, of);
+        return CDRF_SKIPDEFAULT;
     }
     return CDRF_DODEFAULT;
 }
@@ -1305,6 +1433,43 @@ static void pls_dispinfo(NMLVDISPINFOW *di)
     int i = di->item.iItem;
     if (!(di->item.mask & LVIF_TEXT) || i < 0 || i >= g_entN) return;
     wcsncpy_s(di->item.pszText, di->item.cchTextMax, g_ent[i].title ? g_ent[i].title : L"", _TRUNCATE);
+}
+
+/* ライブラリの 1 行(YouTube Music に倣う): 名前と、その下に作った人など。再生中のプレイリストは赤い字 */
+static LRESULT pls_customdraw(NMLVCUSTOMDRAW *cd)
+{
+    if (cd->nmcd.dwDrawStage == CDDS_PREPAINT) return CDRF_NOTIFYITEMDRAW;
+    if (cd->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) {
+        int    i = (int)cd->nmcd.dwItemSpec;
+        HDC    dc = cd->nmcd.hdc;
+        RECT   row, r;
+        HFONT  of;
+        Entry *e;
+        if (i < 0 || i >= g_entN) return CDRF_DODEFAULT;
+        e = &g_ent[i];
+        fill_row(g_pls, cd, &row);
+        SetBkMode(dc, TRANSPARENT);
+        of = (HFONT)SelectObject(dc, g_font);
+        SetRect(&r, row.left + S(12), row.top, row.right - S(8), row.bottom);
+        draw_two_lines(dc, &r, e->title, e->tl && e->tl == g_playTL ? theme_accent() : theme_text(), e->sub, theme_dim_text());
+        SelectObject(dc, of);
+        return CDRF_SKIPDEFAULT;
+    }
+    return CDRF_DODEFAULT;
+}
+
+/* 行の高さは、その高さの空の画像リストを付けて決める(一覧は画像の高さに行を合わせる) */
+static void set_row_heights(void)
+{
+    HIMAGELIST t = ImageList_Create(1, S(ROW_H_TRACK), ILC_COLOR32, 1, 0);
+    HIMAGELIST p = ImageList_Create(1, S(ROW_H_PLS), ILC_COLOR32, 1, 0);
+    /* 一覧は LVS_SHAREIMAGELISTS なので、付け替えた古いものはこちらで消す */
+    ListView_SetImageList(g_tracks, t, LVSIL_SMALL);
+    ListView_SetImageList(g_pls, p, LVSIL_SMALL);
+    if (g_ilTracks) ImageList_Destroy(g_ilTracks);
+    if (g_ilPls) ImageList_Destroy(g_ilPls);
+    g_ilTracks = t;
+    g_ilPls = p;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1537,14 +1702,13 @@ static HWND make_slider(int id, int style, int max, int pos)
 static void create_children(void)
 {
     LVCOLUMNW col;
-    static const WCHAR *names[5] = { L"#", L"タイトル", L"アーティスト", L"アルバム", L"時間" };
-    int i;
 
+    /* どちらの一覧も見出しなし・1 列で、行は自分で描く(2 段。pls_customdraw、tracks_customdraw) */
     g_pls = CreateWindowExW(0, WC_LISTVIEWW, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_OWNERDATA |
-                            LVS_NOCOLUMNHEADER | LVS_SINGLESEL | LVS_SHOWSELALWAYS,
+                            LVS_NOCOLUMNHEADER | LVS_SINGLESEL | LVS_SHOWSELALWAYS | LVS_SHAREIMAGELISTS,
                             0, 0, 10, 10, g_wnd, (HMENU)IDC_PLS, g_inst, NULL);
     g_tracks = CreateWindowExW(0, WC_LISTVIEWW, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_OWNERDATA |
-                               LVS_SINGLESEL | LVS_SHOWSELALWAYS,
+                               LVS_NOCOLUMNHEADER | LVS_SINGLESEL | LVS_SHOWSELALWAYS | LVS_SHAREIMAGELISTS,
                                0, 0, 10, 10, g_wnd, (HMENU)IDC_TRACKS, g_inst, NULL);
     ListView_SetExtendedListViewStyle(g_pls, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
     ListView_SetExtendedListViewStyle(g_tracks, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
@@ -1553,12 +1717,7 @@ static void create_children(void)
     col.cx = 100;
     col.pszText = (LPWSTR)L"";
     ListView_InsertColumn(g_pls, 0, &col);
-    for (i = 0; i < 5; i++) {
-        col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT;
-        col.fmt = (i == 0 || i == 4) ? LVCFMT_RIGHT : LVCFMT_LEFT;
-        col.pszText = (LPWSTR)names[i];
-        ListView_InsertColumn(g_tracks, i, &col);
-    }
+    ListView_InsertColumn(g_tracks, 0, &col);
     g_btn[0] = make_button(IDB_PREV);
     g_btn[1] = make_button(IDB_PLAY);
     g_btn[2] = make_button(IDB_NEXT);
@@ -1567,21 +1726,20 @@ static void create_children(void)
     g_btn[5] = make_button(IDB_MENU);
     g_seek = make_slider(IDC_SEEK, SLS_SEEK, 1, 0);
     g_vol = make_slider(IDC_VOL, SLS_VOLUME, 100, g_cfg.volume);
-    SetWindowSubclass(g_tracks, tracks_subclass, 2, 0);    /* 空のときに「読み込み中…」などを出す */
-    art_init(g_tracks);
+    SetWindowSubclass(g_tracks, tracks_subclass, 2, 0);    /* 空のときに「読み込み中…」などを出す。列幅を合わせる */
+    SetWindowSubclass(g_pls, pls_subclass, 3, 0);           /* 列幅を合わせる */
 }
 
 static void apply_fonts(void)
 {
     SendMessageW(g_pls, WM_SETFONT, (WPARAM)g_font, TRUE);
     SendMessageW(g_tracks, WM_SETFONT, (WPARAM)g_font, TRUE);
+    set_row_heights();                  /* DPI が変わったら行の高さも */
 }
 
 static void apply_theme(void)
 {
     theme_apply_window(g_wnd);
-    ListView_SetTextBkColor(g_tracks, CLR_NONE);   /* 背景に敷いたジャケット画像を字の後ろにも見せる */
-    art_refresh(TRUE);
     InvalidateRect(g_wnd, NULL, TRUE);
 }
 
@@ -1624,8 +1782,9 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
     case WM_GETMINMAXINFO: {
         MINMAXINFO *mi = (MINMAXINFO *)lp;
-        mi->ptMinTrackSize.x = S(560);
-        mi->ptMinTrackSize.y = S(300);
+        /* 左 150 + 真ん中 260 + 曲の一覧が読める幅。高さは真ん中の欄(小さな画像 + 曲名・操作)が収まるまで */
+        mi->ptMinTrackSize.x = S(720);
+        mi->ptMinTrackSize.y = S(440);
         return 0;
     }
     case WM_DPICHANGED: {
@@ -1663,12 +1822,6 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         if (n->hwndFrom == g_tracks) {
             if (n->code == LVN_GETDISPINFOW) { tracks_dispinfo((NMLVDISPINFOW *)lp); return 0; }
             if (n->code == NM_CUSTOMDRAW) return tracks_customdraw((NMLVCUSTOMDRAW *)lp);
-            if (n->code == LVN_ENDSCROLL && art_shown()) {
-                /* なめらかなスクロールは画面をずらしてコピーするので、表示に固定した背景の絵がずれて残る。
-                   止まったら全体を描き直す */
-                InvalidateRect(g_tracks, NULL, FALSE);
-                return 0;
-            }
             if (n->code == LVN_ITEMACTIVATE) {
                 int i = ((NMITEMACTIVATE *)lp)->iItem;
                 if (i < 0) i = ListView_GetNextItem(g_tracks, -1, LVNI_SELECTED);
@@ -1681,6 +1834,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             }
         } else if (n->hwndFrom == g_pls) {
             if (n->code == LVN_GETDISPINFOW) { pls_dispinfo((NMLVDISPINFOW *)lp); return 0; }
+            if (n->code == NM_CUSTOMDRAW) return pls_customdraw((NMLVCUSTOMDRAW *)lp);
             if (n->code == LVN_ITEMCHANGED) {
                 NMLISTVIEW *lv = (NMLISTVIEW *)lp;
                 if ((lv->uNewState & LVIS_SELECTED) && !(lv->uOldState & LVIS_SELECTED) && lv->iItem != g_view) select_entry(lv->iItem);
@@ -1700,7 +1854,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     case WM_HSCROLL:
         if ((HWND)lp == g_seek) {
             int code = LOWORD(wp);
-            if (code == TB_THUMBTRACK) { g_dragging = TRUE; invalidate_bar(); }
+            if (code == TB_THUMBTRACK) { g_dragging = TRUE; invalidate_info(); }
             else if (code == TB_ENDTRACK) {
                 g_dragging = FALSE;
                 if (cur_track()) player_seek((int)SendMessageW(g_seek, SLM_GETPOS, 0, 0) * 1000);
@@ -1777,6 +1931,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         if (r->gen == g_gen) {                  /* 古い曲の画像は捨てる */
             smtc_thumbnail((const BYTE *)r->data.p, (DWORD)r->data.n);
             art_set((const BYTE *)r->data.p, r->data.n);
+            invalidate_art();
         }
         BufFree(&r->data);
         free(r);
@@ -1925,7 +2080,7 @@ int ui_run(HINSTANCE inst, BOOL mute, BOOL noActivate, const WCHAR *openM3u)
             set_status(text, TRUE);
             free(ew);
         } else {
-            set_status(L"ログイン情報が未設定です。右下の … から設定するか、プレイリストの URL を開いてください", FALSE);
+            set_status(L"ログイン情報が未設定です。… から設定するか、プレイリストの URL を開いてください", FALSE);
         }
         if (g_cfg.lastPlaylist[0]) {
             int i = add_entry(g_cfg.lastPlaylist, NULL, NULL, FALSE);
@@ -1941,7 +2096,7 @@ int ui_run(HINSTANCE inst, BOOL mute, BOOL noActivate, const WCHAR *openM3u)
         if (f != INVALID_HANDLE_VALUE) {
             DWORD n = GetFileSize(f, NULL), got = 0;
             BYTE *b = n && n < 8 * 1024 * 1024 ? (BYTE *)malloc(n) : NULL;
-            if (b && ReadFile(f, b, n, &got, NULL)) art_set(b, got);
+            if (b && ReadFile(f, b, n, &got, NULL)) { art_set(b, got); invalidate_art(); }
             free(b);
             CloseHandle(f);
         }

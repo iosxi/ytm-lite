@@ -88,6 +88,9 @@ COLORREF theme_text(void)       { return g_dark ? RGB(255, 255, 255) : GetSysCol
 COLORREF theme_dim_text(void)   { return g_dark ? RGB(170, 170, 170) : RGB(96, 96, 96); }
 COLORREF theme_line(void)       { return g_dark ? RGB(60, 60, 60)    : RGB(223, 223, 223); }
 COLORREF theme_accent(void)     { return g_dark ? RGB(255, 78, 69)   : RGB(204, 0, 0); }
+/* 自分で描く一覧の行: 選んでいる行、マウスが乗っている行(Explorer の一覧の色に近いもの) */
+COLORREF theme_sel_back(void)   { return g_dark ? RGB(62, 62, 62)    : RGB(204, 232, 255); }
+COLORREF theme_hot_back(void)   { return g_dark ? RGB(45, 45, 45)    : RGB(229, 243, 255); }
 HBRUSH   theme_back_brush(void)   { return g_brBack; }
 HBRUSH   theme_footer_brush(void) { return g_brFooter; }
 HBRUSH   theme_ctrl_brush(void)   { return g_brCtrl; }

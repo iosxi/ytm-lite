@@ -22,7 +22,7 @@
 #include <wchar.h>
 
 #define APP_NAME     L"ytm-lite"
-#define APP_VERSION  "15"            /* .rc の VERSIONINFO と .manifest も合わせて上げる */
+#define APP_VERSION  "16"            /* .rc の VERSIONINFO と .manifest も合わせて上げる */
 
 /* 画面のスレッドへ届ける通知 */
 #define WM_APP_LIBRARY   (WM_APP + 1)   /* lParam = LibResult*  */
@@ -116,7 +116,6 @@ typedef struct {
     int   mediakeys;            /* キーボードのメディアキーを横取りする */
     int   thumbnail;            /* ジャケット画像を SMTC に渡す */
     int   thumbSize;            /* ジャケット画像の一辺(px)。既定 544 */
-    int   artOpacity;           /* 一覧の背景に敷くジャケット画像の濃さ(%)。0 = 敷かない */
     int   debug;
     char  lastPlaylist[128];
     WCHAR m3u[MAX_PATH];        /* 起動時に読み直す M3U(プレイリストの URL を並べたもの) */
@@ -143,12 +142,9 @@ BOOL  ff_launcher_for_profile(const WCHAR *profile, WCHAR *exe, size_t cap);
 int   ff_candidates(WCHAR (*list)[MAX_PATH], int max);
 
 /* ---------------------------------------------------------------- art.c */
-void  art_init(HWND list);
 void  art_set(const BYTE *jpeg, size_t n);     /* いまの曲の画像。NULL で消す */
-void  art_refresh(BOOL force);                 /* 大きさ・テーマが変わったら作り直す */
-void  art_paint(HDC dc, const RECT *clip);     /* 曲の一覧のカスタム描画から(clip の範囲だけ貼る) */
-BOOL  art_shown(void);
-extern const WCHAR *g_artTest;                 /* -art <jpg>(検証用): 再生しなくてもこの画像を敷く */
+BOOL  art_draw(HDC dc, const RECT *r);         /* r の中央に描く。画像が無ければ FALSE */
+extern const WCHAR *g_artTest;                 /* -art <jpg>(検証用): 再生しなくてもこの画像を出す */
 
 /* ---------------------------------------------------------------- m3u.c */
 typedef struct { char *id; WCHAR *title; } M3uItem;    /* title は #EXTINF の名前(無ければ NULL) */
@@ -274,6 +270,8 @@ COLORREF theme_text(void);
 COLORREF theme_dim_text(void);
 COLORREF theme_line(void);
 COLORREF theme_accent(void);
+COLORREF theme_sel_back(void);
+COLORREF theme_hot_back(void);
 HBRUSH   theme_back_brush(void);
 HBRUSH   theme_footer_brush(void);
 HBRUSH   theme_ctrl_brush(void);
