@@ -170,23 +170,24 @@ LONG64 unix_time(void)
 static CRITICAL_SECTION g_logCs;
 static BOOL g_logInit;
 
-void log_printf(const char *fmt, ...)
-{
-    char       line[2048];
-    int        n;
-    va_list    ap;
-    SYSTEMTIME st;
-    WCHAR      path[MAX_PATH];
-    HANDLE     f;
-    DWORD      wr;
+#define LOG_MAX  (1024 * 1024)      /* これを超えたら ytm-lite.log.old に回す */
 
-    if (!g_cfg.debug) return;
+/* 日付と時刻を付けて ytm-lite.log へ 1 行書く。何日も続けて使う間の出来事を追えるよう日付も付ける */
+static void log_write(const char *fmt, va_list ap)
+{
+    char          line[2048];
+    int           n;
+    SYSTEMTIME    st;
+    WCHAR         path[MAX_PATH], old[MAX_PATH];
+    HANDLE        f;
+    DWORD         wr;
+    LARGE_INTEGER size;
+
     if (!g_logInit) { InitializeCriticalSection(&g_logCs); g_logInit = TRUE; }
     GetLocalTime(&st);
-    n = _snprintf(line, sizeof(line), "%02d:%02d:%02d.%03d ", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
-    va_start(ap, fmt);
+    n = _snprintf(line, sizeof(line), "%04d-%02d-%02d %02d:%02d:%02d.%03d ", st.wYear, st.wMonth, st.wDay,
+                  st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
     n += _vsnprintf(line + n, sizeof(line) - (size_t)n - 3, fmt, ap);
-    va_end(ap);
     if (n < 0 || n > (int)sizeof(line) - 3) n = (int)sizeof(line) - 3;
     line[n++] = '\r';
     line[n++] = '\n';
@@ -194,11 +195,35 @@ void log_printf(const char *fmt, ...)
     path[MAX_PATH - 1] = 0;
     EnterCriticalSection(&g_logCs);
     f = CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (f != INVALID_HANDLE_VALUE && GetFileSizeEx(f, &size) && size.QuadPart > LOG_MAX) {
+        CloseHandle(f);
+        _snwprintf(old, MAX_PATH, L"%s.old", path);
+        old[MAX_PATH - 1] = 0;
+        MoveFileExW(path, old, MOVEFILE_REPLACE_EXISTING);
+        f = CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    }
     if (f != INVALID_HANDLE_VALUE) {
         WriteFile(f, line, (DWORD)n, &wr, NULL);
         CloseHandle(f);
     }
     LeaveCriticalSection(&g_logCs);
+}
+
+void log_printf(const char *fmt, ...)
+{
+    va_list ap;
+    if (!g_cfg.debug) return;
+    va_start(ap, fmt);
+    log_write(fmt, ap);
+    va_end(ap);
+}
+
+void log_always(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    log_write(fmt, ap);
+    va_end(ap);
 }
 
 void out_printf(const char *fmt, ...)

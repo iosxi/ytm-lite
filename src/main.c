@@ -88,6 +88,7 @@ static void selftest(void)
     CHECK(JsonParse("{\"a\":", 5) == NULL, "json: truncated input fails");
 
     CHECK(yt_selftest_jar() == 0, "guest cookie jar: add, update, delete");
+    CHECK(yt_selftest_setcookie() == 0, "set-cookie: deletion and login cookie names");
 
     Sha1Hex("abc", h);
     CHECK(!strcmp(h, "a9993e364706816aba3e25717850c26c9cd0d89d"), "sha1: abc");

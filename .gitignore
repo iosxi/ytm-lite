@@ -1,5 +1,6 @@
 build/
 ytm-lite.ini
 ytm-lite.log
+ytm-lite.log.old
 *.m4a
 release-notes.md

@@ -393,6 +393,127 @@ static int logged_in_flag(J *root)
     return -1;
 }
 
+/* ------------------------------------------------------------------ */
+/*  アカウントの要求で、ログオフの兆しをログに残す                       */
+/*                                                                     */
+/*  2026-10-13: 遠隔の利用者のアカウントが 2 日続けてログオフされた。     */
+/*  次に起きたとき YouTube から何が返っていたかを追えるよう、debug に     */
+/*  関係なく ytm-lite.log に書く(log_always)。cookie の値は書かない。    */
+/* ------------------------------------------------------------------ */
+
+/* ログインそのものの cookie。これが消される・入れ替わるのはログオフの兆し */
+static BOOL is_login_cookie(const char *name)
+{
+    static const char *const names[] = {
+        "SID", "HSID", "SSID", "APISID", "SAPISID", "LOGIN_INFO",
+        "__Secure-1PSID", "__Secure-3PSID", "__Secure-1PAPISID", "__Secure-3PAPISID",
+        "__Secure-1PSIDTS", "__Secure-3PSIDTS", NULL
+    };
+    int i;
+    for (i = 0; names[i]; i++) if (!strcmp(name, names[i])) return TRUE;
+    return FALSE;
+}
+
+/* Set-Cookie の 1 行が「消す」ものか(値が空・EXPIRED・deleted、Max-Age=0 以下、Expires が過去の年) */
+static BOOL set_cookie_deletes(const char *line, size_t ll, const char *val, size_t vl)
+{
+    char        tmp[2048];
+    const char *p;
+    SYSTEMTIME  st;
+    if (!vl || (vl == 7 && !strncmp(val, "EXPIRED", 7)) || (vl == 7 && !strncmp(val, "deleted", 7))) return TRUE;
+    if (ll >= sizeof(tmp)) ll = sizeof(tmp) - 1;
+    memcpy(tmp, line, ll);
+    tmp[ll] = 0;
+    if ((p = U8FindI(tmp, "Max-Age=")) != NULL && (p[8] == '0' || p[8] == '-')) return TRUE;
+    if ((p = U8FindI(tmp, "Expires=")) != NULL) {
+        GetSystemTime(&st);
+        for (p += 8; *p && *p != ';'; p++)       /* "Thu, 01-Jan-1970 00:00:00 GMT" の 4 桁の年 */
+            if (p[0] >= '0' && p[0] <= '9' && p[1] >= '0' && p[1] <= '9' && p[2] >= '0' && p[2] <= '9' &&
+                p[3] >= '0' && p[3] <= '9')
+                return atoi(p) < st.wYear;
+    }
+    return FALSE;
+}
+
+static BOOL deletes(const char *line)
+{
+    const char *eq = strchr(line, '='), *semi = strchr(line, ';');
+    size_t      vl = semi ? (size_t)(semi - eq - 1) : strlen(eq + 1);
+    return set_cookie_deletes(line, strlen(line), eq + 1, vl);
+}
+
+int yt_selftest_setcookie(void)
+{
+    int fail = 0;
+    fail += !deletes("SID=EXPIRED; Domain=.youtube.com; Path=/");
+    fail += !deletes("SID=; Path=/");
+    fail += !deletes("__Secure-3PSID=x; Max-Age=0; Path=/");
+    fail += !deletes("SID=x; Expires=Thu, 01-Jan-1970 00:00:01 GMT; Path=/");
+    fail += deletes("__Secure-1PSIDTS=sidts-abc; Expires=Fri, 15-Oct-2027 01:02:03 GMT; Path=/; Secure");
+    fail += deletes("YSC=abc; Domain=.youtube.com; Path=/; Secure; HttpOnly");
+    fail += deletes("VISITOR_INFO1_LIVE=v1; Max-Age=15552000");
+    fail += !is_login_cookie("__Secure-1PSIDTS") || is_login_cookie("SIDCC");
+    return fail;
+}
+
+static BOOL g_loginLogged;     /* 「ログインできている」をこの起動で書いたか */
+
+static void note_account_response(const char *endpoint, const HttpResp *r, J *root)
+{
+    Buf         login = {0}, other = {0};
+    const char *line = r->setCookie;
+    int         li;
+
+    /* Set-Cookie: 名前と「消す」かどうかだけ */
+    while (line && *line) {
+        size_t      ll = strcspn(line, "\n");
+        const char *eq = memchr(line, '=', ll);
+        if (eq && eq > line && eq - line < 128) {
+            char        name[128];
+            const char *val = eq + 1, *semi;
+            size_t      vl;
+            memcpy(name, line, (size_t)(eq - line));
+            name[eq - line] = 0;
+            semi = memchr(val, ';', ll - (size_t)(val - line));
+            vl = semi ? (size_t)(semi - val) : ll - (size_t)(val - line);
+            {
+                Buf *b = is_login_cookie(name) ? &login : &other;
+                if (b->n) BufAddStr(b, ", ");
+                BufAddf(b, "%s%s", name, set_cookie_deletes(line, ll, val, vl) ? "(DELETED)" : "");
+            }
+        }
+        line += ll;
+        if (*line == '\n') line++;
+    }
+    if (login.n) log_always("account %s: Set-Cookie of login cookies: %s", endpoint, login.p);
+    if (other.n) log_printf("  set-cookie: %s", other.p);
+
+    if (r->status != 200) {
+        JDoc       *d = JsonParse(r->body.p, r->body.n);
+        J          *e = d ? JsonRoot(d) : NULL;
+        const char *st = JStr(e, "error.status"), *msg = JStr(e, "error.message");
+        log_always("account %s: HTTP %d %s %s", endpoint, r->status, st ? st : "", msg ? msg : "");
+        if (d) JsonFree(d);
+    }
+    /* logged_in は、ログインできていれば 1、cookie が効いていなければ 0(2026-10-13 実測: アカウントの
+       browse は 1、匿名は 0)。WEB の応答にある mainAppWebResponseContext.loggedOut は、YouTube Music では
+       どちらの応答にも無かった。「いつまでログインできていたか」も追えるよう、通ったことも起動ごとに 1 回書く */
+    if (root) {
+        li = logged_in_flag(root);
+        if (li != 1) {
+            log_always("account %s: NOT logged in (logged_in=%d, cookie from %s)", endpoint, li,
+                       g_cfg.cookieSource == COOKIE_FIREFOX ? "Firefox" : "paste");
+            g_loginLogged = FALSE;
+        } else if (!g_loginLogged) {
+            log_always("account %s: logged in (cookie from %s)", endpoint,
+                       g_cfg.cookieSource == COOKIE_FIREFOX ? "Firefox" : "paste");
+            g_loginLogged = TRUE;
+        }
+    }
+    BufFree(&login);
+    BufFree(&other);
+}
+
 static JDoc *music_post_once(const char *endpoint, const char *query, const char *bodyTail, BOOL account,
                              BOOL *authFail, char *err, size_t errlen)
 {
@@ -406,6 +527,8 @@ static JDoc *music_post_once(const char *endpoint, const char *query, const char
     *authFail = FALSE;
     if (account && !g_cfg.cookie) {
         _snprintf(err, errlen, "%s", g_cfg.cookieErr[0] ? g_cfg.cookieErr : "ログイン情報が設定されていない");
+        err[errlen - 1] = 0;
+        if (g_cfg.cookieSource != COOKIE_NONE) log_always("account %s: no login cookies: %s", endpoint, err);
         *authFail = TRUE;
         return NULL;
     }
@@ -457,7 +580,8 @@ static JDoc *music_post_once(const char *endpoint, const char *query, const char
             else note_response_context(JsonRoot(doc), account);
         }
         log_printf("  -> HTTP %d, %u bytes", r.status, (unsigned)r.body.n);
-        if (!account) note_guest_cookies(r.setCookie);
+        if (account) note_account_response(endpoint, &r, doc ? JsonRoot(doc) : NULL);
+        else note_guest_cookies(r.setCookie);
         HttpRespFree(&r);
     }
     err[errlen - 1] = 0;
@@ -474,7 +598,7 @@ static BOOL reload_account(void)
     if (g_cfg.cookieSource != COOKIE_FIREFOX || !cfg_reload_cookie(e, sizeof(e))) return FALSE;
     g_userSession[0] = 0;
     g_musicVisitor[0] = 0;
-    log_printf("account cookies reloaded from Firefox");
+    log_always("account cookies re-read from Firefox to retry");
     return TRUE;
 }
 
@@ -691,6 +815,7 @@ int yt_library(PlaylistList *out, char *err, size_t errlen)
     if (!g_cfg.cookie && !reload_account()) {
         _snprintf(err, errlen, "%s", g_cfg.cookieErr[0] ? g_cfg.cookieErr : "ログイン情報が設定されていない");
         err[errlen - 1] = 0;
+        if (g_cfg.cookieSource != COOKIE_NONE) log_always("account library: no login cookies: %s", err);
         return 0;
     }
     for (page = 0; page < 20; page++) {

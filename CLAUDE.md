@@ -31,6 +31,8 @@
 - 再生部分（復号、WASAPI、メモリ）は通信せずに確かめられる: `-probe <id> -save x.m4a` で 1 曲保存しておき、
   `-playtest x.m4a` で何度でも鳴らす（音量 0）。
 - ログは ini に `debug=1` を書くと、ini と同じフォルダの `ytm-lite.log` に出る（要求ごとに 1 行）。
+  ログインまわり（`log_always`: ログインできた・できない、ログインの cookie の Set-Cookie、401/403）は
+  debug に関係なく出る（v12）。cookie の値は書かない。
 
 ## 確かめ方
 

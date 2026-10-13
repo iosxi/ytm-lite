@@ -239,6 +239,22 @@ v11（本人の指摘「手順は、考えずに書かれていることだけ�
   Firefox 欄の「ログオフされることがある」）。理由は README の「なぜこの手順か」と Firefox の節に置いた。
 - 「何も出ていなければ F5」のような判断の要る指示を、「F5 キーを押す」と言い切る形にした。
 
+v12: 次にログオフが起きたとき、YouTube から何が返っていたかを残すため、アカウントの要求の応答から
+ログオフの兆しを拾って、debug に関係なく `ytm-lite.log` に書くようにした（`note_account_response`、`log_always`）。
+ログの行には日付も付け、1MB で `.old` に回す。cookie の値は書かない。実測（2026-10-13、要求は計 7 回）:
+
+| 場合 | `logged_in` | `mainAppWebResponseContext.loggedOut` | Set-Cookie |
+| --- | --- | --- | --- |
+| アカウントの browse（Firefox Portable1 の R: 側、ログイン中） | 1 | 無い | 1 つも無い |
+| 匿名の browse（ゲストのセッション） | 0 | 無い | — |
+| アカウントの browse（C: 側の FirefoxPortable1。SAPISID はあるがログオフ済みの古い cookie） | 0（HTTP 200） | — | — |
+
+- ログオフされた cookie を送っても HTTP 401 ではなく、200 で `logged_in=0` が返る。これを主な目印にする。
+- WEB の応答にある `loggedOut` は、YouTube Music（WEB_REMIX）の応答には無かったので見ない。
+- ログイン中の browse には Set-Cookie が来ないので、ふだんは常時のログが増えない（起動ごとに「logged in」の 1 行だけ）。
+  ログインの cookie（SID 系・PSIDTS など）の Set-Cookie が来たら、名前と「消す」ものかだけを書く。
+  そもそもログオフの前後に Set-Cookie が来るのかは、まだ見ていない。
+
 ### 2026-10-13: Windows のメディア コントロール（SMTC）に出す（v6）
 
 本人の要望: windows\muutask に再生中として出し、そこから操作したい。

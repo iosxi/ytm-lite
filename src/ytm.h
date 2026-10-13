@@ -22,7 +22,7 @@
 #include <wchar.h>
 
 #define APP_NAME     L"ytm-lite"
-#define APP_VERSION  "11"            /* .rc の VERSIONINFO と .manifest も合わせて上げる */
+#define APP_VERSION  "12"            /* .rc の VERSIONINFO と .manifest も合わせて上げる */
 
 /* 画面のスレッドへ届ける通知 */
 #define WM_APP_LIBRARY   (WM_APP + 1)   /* lParam = LibResult*  */
@@ -54,6 +54,7 @@ WCHAR *WDup(const WCHAR *s);
 const char *U8FindI(const char *hay, const char *needle);
 void  Sha1Hex(const char *s, char out[41]);
 void  log_printf(const char *fmt, ...);          /* debug=1 のときだけ ytm-lite.log へ */
+void  log_always(const char *fmt, ...);          /* debug に関係なく ytm-lite.log へ(ログオフの兆しなど、まれなものだけ) */
 void  out_printf(const char *fmt, ...);          /* -probe などの結果を標準出力へ(UTF-8) */
 LONG64 now_ms(void);                             /* 起動からのミリ秒(GetTickCount64) */
 LONG64 unix_time(void);
@@ -201,6 +202,7 @@ BOOL yt_cookie_ok(const char *cookie);
 char *yt_playlist_id_from_text(const char *text);      /* URL や ID から ID を取り出す */
 int  yt_fetch_thumb(const char *url, Buf *out, char *err, size_t errlen);
 int  yt_selftest_jar(void);                            /* 失敗の数 */
+int  yt_selftest_setcookie(void);                      /* 失敗の数 */
 void yt_set_wait_hook(void (*fn)(int sec));           /* 上限で待つとき秒数を、終わったら 0 を知らせる */
 void yt_set_progress_hook(void (*fn)(const char *id, int count));   /* プレイリストを 1 ページ読むごと */
 void yt_free_tracks(TrackList *t);

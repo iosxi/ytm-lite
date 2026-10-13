@@ -99,6 +99,23 @@ YouTube Music で灰色になっている（再生できない）曲は飛ばし
 | `theme=1` / `theme=2` | ライト / ダークに固定する（既定は Windows に合わせる） |
 | `debug=1` | 通信の記録を `ytm-lite.log` に書く |
 
+## ログ（ytm-lite.log）
+
+ログインまわりの出来事だけは、`debug` の設定に関係なく `ytm-lite.exe` と同じフォルダの `ytm-lite.log` に書きます。
+アカウントがログオフされたとき、いつ・何が返ってきたかを後から追うためです。cookie の値は書きません。
+
+| 行 | 意味 |
+| --- | --- |
+| `account browse: logged in (cookie from paste)` | ログインできている（起動してから最初の 1 回だけ書く） |
+| `account browse: NOT logged in (logged_in=0, …)` | YouTube から「ログインしていない」と返った。ログオフされた |
+| `account browse: HTTP 401 …` | ログイン情報が拒まれた |
+| `account browse: Set-Cookie of login cookies: SID(DELETED), …` | YouTube がログインの cookie を消した・入れ替えた |
+| `account …: no login cookies: …` | ログイン情報が読めない（Firefox 側がログオフされた、など） |
+| `account cookies re-read from Firefox to retry` | Firefox から読み直してやり直した |
+
+ログオフされたときは、`ytm-lite.log` を添えて知らせてもらえると原因を追えます。
+1MB を超えると `ytm-lite.log.old` に回します。
+
 ## 注意
 
 - YouTube Music の公式アプリではありません。YouTube の非公開の API を使っているので、
