@@ -98,6 +98,9 @@ static int    g_view = -1;
 static TL    *g_viewTL;
 
 static TL    *g_playTL;
+/* 再生中のプレイリストの ID。「読み直す」で左の一覧の行の中身(tl)が新しくなっても、再生は古い中身(g_playTL)で
+   続くので、赤い字にする行はこの ID で決める(v24。中身の一致で決めていた v23 までは、読み直すと赤が消えた) */
+static char   g_playId[128];
 static int   *g_order, g_orderN, g_pos = -1;
 static int    g_gen;
 static int    g_failStreak;
@@ -202,6 +205,28 @@ static Track *cur_track(void)
     return &g_playTL->t.v[g_order[g_pos]];
 }
 
+/* 左の一覧のこの行が、再生中のプレイリストか */
+static BOOL is_play_entry(const Entry *e)
+{
+    return g_playTL && g_playId[0] && e->id && !strcmp(e->id, g_playId);
+}
+
+/* 曲の一覧で、鳴っている曲の行(無ければ -1)。読み直して中身が新しくなった一覧では、動画 ID で探す
+   (同じ曲が 2 度あれば、元と同じ位置のものを、無ければ最初のものを) */
+static int view_cur_row(void)
+{
+    Track *c = cur_track();
+    int    k, i;
+    if (!c || !g_viewTL) return -1;
+    k = g_order[g_pos];
+    if (g_viewTL == g_playTL) return k;
+    if (g_view < 0 || g_view >= g_entN || !is_play_entry(&g_ent[g_view]) || !c->vid[0]) return -1;
+    if (k < g_viewTL->t.n && !strcmp(g_viewTL->t.v[k].vid, c->vid)) return k;
+    for (i = 0; i < g_viewTL->t.n; i++)
+        if (!strcmp(g_viewTL->t.v[i].vid, c->vid)) return i;
+    return -1;
+}
+
 /* 再生中の曲を、曲の一覧のなるべく真ん中に出す(見ているのが再生中のプレイリストのときだけ)。
    次へ・前へ・自動で次の曲に進んだとき、画面の外の曲が鳴っていることがないように(本人の要望) */
 static BOOL g_pickedInList;     /* 一覧で選んで再生した(その曲は見えているので動かさない) */
@@ -210,8 +235,7 @@ static void center_current(void)
 {
     int  row, per, top, rowH, want;
     RECT r;
-    if (!g_viewTL || g_viewTL != g_playTL || g_pos < 0 || g_pos >= g_orderN) return;
-    row = g_order[g_pos];
+    if ((row = view_cur_row()) < 0) return;
     per = ListView_GetCountPerPage(g_tracks);
     top = ListView_GetTopIndex(g_tracks);
     if (!ListView_GetItemRect(g_tracks, top, &r, LVIR_BOUNDS)) return;
@@ -561,8 +585,12 @@ static void play_from(TL *tl, int idx)
 {
     if (!tl || !tl->t.n) return;
     if (tl != g_playTL) {
+        int i;
         tl_release(g_playTL);
         g_playTL = tl_ref(tl);
+        g_playId[0] = 0;
+        for (i = 0; i < g_entN; i++)
+            if (g_ent[i].tl == tl && g_ent[i].id) { strncpy_s(g_playId, sizeof(g_playId), g_ent[i].id, _TRUNCATE); break; }
         /* 再生中のプレイリストは左の一覧で赤い字。描き直さないと、スクロールなどで描き直されるまで
            赤くならなかった(2026-10-15 実測: 再生を始めてから 6 秒、左の一覧は 1 度も描かれなかった) */
         InvalidateRect(g_pls, NULL, FALSE);
@@ -1487,7 +1515,7 @@ static LRESULT tracks_customdraw(NMLVCUSTOMDRAW *cd)
         HFONT    of;
         if (!g_viewTL || i < 0 || i >= g_viewTL->t.n) return CDRF_DODEFAULT;
         t = &g_viewTL->t.v[i];
-        cur = g_viewTL == g_playTL && cur_track() == t;
+        cur = i == view_cur_row();
         fill_row(g_tracks, cd, &row);
         SetBkMode(dc, TRANSPARENT);
         of = (HFONT)SelectObject(dc, g_font);
@@ -1539,7 +1567,7 @@ static LRESULT pls_customdraw(NMLVCUSTOMDRAW *cd)
         SetBkMode(dc, TRANSPARENT);
         of = (HFONT)SelectObject(dc, g_font);
         SetRect(&r, row.left + S(12), row.top, row.right - S(8), row.bottom);
-        draw_two_lines(dc, &r, e->title, e->tl && e->tl == g_playTL ? theme_accent() : theme_text(), e->sub, theme_dim_text());
+        draw_two_lines(dc, &r, e->title, is_play_entry(e) ? theme_accent() : theme_text(), e->sub, theme_dim_text());
         SelectObject(dc, of);
         return CDRF_SKIPDEFAULT;
     }
