@@ -563,6 +563,9 @@ static void play_from(TL *tl, int idx)
     if (tl != g_playTL) {
         tl_release(g_playTL);
         g_playTL = tl_ref(tl);
+        /* 再生中のプレイリストは左の一覧で赤い字。描き直さないと、スクロールなどで描き直されるまで
+           赤くならなかった(2026-10-15 実測: 再生を始めてから 6 秒、左の一覧は 1 度も描かれなかった) */
+        InvalidateRect(g_pls, NULL, FALSE);
     }
     g_failStreak = 0;
     build_order(idx);
