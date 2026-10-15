@@ -420,6 +420,11 @@ static LRESULT CALLBACK tracks_subclass(HWND h, UINT msg, WPARAM wp, LPARAM lp, 
 
 static void show_view(int i)
 {
+    int n = i >= 0 && i < g_entN && g_ent[i].tl ? g_ent[i].tl->t.n : 0;
+    /* 件数を入れ替える前に先頭へ戻す。下のほうを見ていたまま件数を減らすと、先頭の位置が古いまま残り、
+       縦のスクロールバーが消えたときの WM_SIZE(fit_column)の後で、先頭が負(-174 など)になった。
+       一覧は真っ白になり、マウスを乗せた行だけが出たり、1 曲目が真ん中や下に出たりした(2026-10-15 実測) */
+    if (i != g_view || n < ListView_GetItemCount(g_tracks)) ListView_EnsureVisible(g_tracks, 0, FALSE);
     tl_release(g_viewTL);
     g_viewTL = NULL;
     g_view = i;
@@ -428,7 +433,7 @@ static void show_view(int i)
         ListView_SetItemState(g_pls, i, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
         ListView_EnsureVisible(g_pls, i, FALSE);
     }
-    ListView_SetItemCountEx(g_tracks, g_viewTL ? g_viewTL->t.n : 0, 0);
+    ListView_SetItemCountEx(g_tracks, n, 0);
     center_current();                   /* 再生中のプレイリストに戻ったら、鳴っている曲を見せる */
     InvalidateRect(g_tracks, NULL, TRUE);
 }
