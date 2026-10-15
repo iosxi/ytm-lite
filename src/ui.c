@@ -1112,10 +1112,16 @@ static INT_PTR CALLBACK login_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
             WCHAR *w = (WCHAR *)calloc((size_t)n + 1, sizeof(WCHAR));
             char  *u, *ck = NULL;
             char   au[8], ua[512];
-            BOOL   ok = FALSE;
+            BOOL   ok = FALSE, hasCookie = FALSE;
             if (!w) return TRUE;
             GetWindowTextW(ed, w, n + 1);
             u = W2U(w);
+            /* cookie が丸ごと無いか(ページ本体の行は Service Worker が応答するので cookie が載らない) */
+            if (u) {
+                const char *q;
+                for (q = u; *q && !hasCookie; q++)
+                    hasCookie = !_strnicmp(q, "cookie", 6) || !strncmp(q, "-b ", 3) || !strncmp(q, "SAPISID=", 8);
+            }
             if (u && yt_parse_auth_text(u, &ck, au, sizeof(au), ua, sizeof(ua))) {
                 strcpy_s(g_cfg.authuser, sizeof(g_cfg.authuser), au);
                 if (ua[0]) strcpy_s(g_cfg.ua, sizeof(g_cfg.ua), ua);
@@ -1126,6 +1132,13 @@ static INT_PTR CALLBACK login_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
             if (u) { SecureZeroMemory(u, strlen(u)); free(u); }
             SecureZeroMemory(w, (size_t)n * sizeof(WCHAR));
             free(w);
+            if (!ok && !hasCookie && n > 0) {
+                MessageBoxW(dlg, L"貼り付けたものに cookie が含まれていません。\r\n\r\n"
+                                 L"一番上の行（music.youtube.com のページそのもの）には、ログインすると cookie が載りません。\r\n"
+                                 L"絞り込みの欄に browse と入れて、左の「ライブラリ」を押し、"
+                                 L"出てきた browse の行をコピーしてください。", APP_NAME, MB_ICONWARNING);
+                return TRUE;
+            }
             if (!ok) {
                 MessageBoxW(dlg, L"ログイン済みの cookie が見つかりませんでした。\r\n"
                                  L"SAPISID か __Secure-3PAPISID を含む cookie が必要です。", APP_NAME, MB_ICONWARNING);

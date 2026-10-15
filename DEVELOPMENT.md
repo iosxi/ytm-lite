@@ -255,6 +255,30 @@ v12: 次にログオフが起きたとき、YouTube から何が返っていた�
   ログインの cookie（SID 系・PSIDTS など）の Set-Cookie が来たら、名前と「消す」ものかだけを書く。
   そもそもログオフの前後に Set-Cookie が来るのかは、まだ見ていない。
 
+### 2026-10-15: Chrome の「cURL としてコピー」に cookie が無い（v21）
+
+本人の報告: 手順どおり「一番上の行」を「cURL としてコピー（bash）」したら、`Referer: https://accounts.google.com/`、
+`User-Agent`、`sec-ch-ua*` だけで、cookie も `Accept` も `sec-fetch-*` も無かった（＝開発者ツールの
+「仮のヘッダー（Provisional headers）」だけ）。貼ると「ログイン済みの cookie が見つかりませんでした」。
+
+実測:
+
+| 確かめたこと | 結果 |
+| --- | --- |
+| 使い捨てプロファイルの Chrome 155（headless、未ログイン）で 2 回読む（CDP） | Service Worker は登録されない。F5 後のページ本体にも実際のヘッダー（`requestWillBeSentExtraInfo`）が届き、cookie 6 個が載る |
+| 本人の Chrome（ログイン済み）で music.youtube.com を開く | `https://music.youtube.com/sw.js` が登録・制御中、navigation preload あり、ページ本体の `workerStart` > 0 |
+| `sw.js` が読み込む `serviceworker-music-appshell.js` の fetch の扱い | `respondWith` するのは ①`mode==="navigate"` で `/`・`/feed/…`・`/playlist`・`/watch` など ②youtube.com の .js/.css 等 ③signin/logout/purge_shell だけ。`/youtubei/v1/…` は横取りしない |
+| 本人の Chrome で左の「ライブラリ」を押す | `youtubei/v1/browse` の fetch が 1 本（転送 18KB、キャッシュでない） |
+
+- ログインすると置かれる Service Worker がページ本体に応答するので、開発者ツールのその行には実際の要求ヘッダーが無い。
+  未ログインでは Service Worker が無いので、v10 のときは気づけなかった。
+- 手順を「絞り込みに `browse` → 左の『ライブラリ』を押す → `browse` の行をコピー」に変えた（ytmusicapi のブラウザ認証の手順と同じ通信）。
+  `x-goog-authuser` もこの行に載る。
+- 貼ったものに cookie が丸ごと無いとき（`cookie` / `-b ` / `SAPISID=` のどれも無い）は、「一番上の行には cookie が載らない、
+  browse の行を」と出す。
+- **確かめていないこと:** シークレット ウィンドウでの新しい手順を通しで（ログインからコピー・保存まで）。Firefox の開発者ツールで
+  ページ本体の行に cookie が出るかどうか（手順は Firefox も browse の行に揃えた）。
+
 ### 2026-10-13: Windows のメディア コントロール（SMTC）に出す（v6）
 
 本人の要望: windows\muutask に再生中として出し、そこから操作したい。
